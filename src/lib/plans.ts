@@ -20,7 +20,7 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     maxLists: 3,
     maxNamesPerList: 20,
     customColumns: false,
-    notifications: false,
+    notifications: true, // MVP: Enabled for now
     qrCodes: false,
     analytics: false,
     description: "Perfect for trying Herder with a single class.",

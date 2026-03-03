@@ -2,12 +2,12 @@ import Link from "next/link";
 
 export default function LandingPage() {
   const features = [
-    { emoji: "📸", head: "Photo → Smart list",    body: "Snap any paper roster. Gemini AI reads every name and builds your live check-in list instantly." },
-    { emoji: "☑️", head: "Tap-to-check-in",       body: "One tap marks a student present. QR codes make future sessions even faster." },
-    { emoji: "🔁", head: "Recurring classes",      body: "Set a schedule once — your list reappears every session with custom data intact." },
-    { emoji: "📲", head: "Auto guardian alerts",   body: "SMS or email fires automatically when check-in is submitted. Guardians always know. (Pro)" },
-    { emoji: "🗂️", head: "Custom columns",         body: "Allergies, pickup location, guardian phone — whatever your event needs, every session. (Standard+)" },
-    { emoji: "📊", head: "Attendance history",     body: "Every session archived. Filter, export, and prove attendance for billing." },
+    { emoji: "📸", head: "Photo → Smart list", body: "Snap any paper roster. Gemini AI reads every name and builds your live check-in list instantly." },
+    { emoji: "☑️", head: "Tap-to-check-in", body: "One tap marks a student present. QR codes make future sessions even faster." },
+    { emoji: "🔁", head: "Recurring classes", body: "Set a schedule once — your list reappears every session with custom data intact." },
+    { emoji: "📲", head: "Auto guardian alerts", body: "SMS or email fires automatically when check-in is submitted. Guardians always know. (Pro)" },
+    { emoji: "🗂️", head: "Custom columns", body: "Allergies, pickup location, guardian phone — whatever your event needs, every session. (Standard+)" },
+    { emoji: "📊", head: "Attendance history", body: "Every session archived. Filter, export, and prove attendance for billing." },
   ];
 
   return (
@@ -18,15 +18,15 @@ export default function LandingPage() {
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-terra flex items-center justify-center">
               <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
-                <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
             <span className="font-display font-black text-xl text-ink tracking-tight">Herder</span>
           </div>
           <div className="hidden md:flex items-center gap-8 text-sm font-semibold text-ink-light">
             <a href="#features" className="hover:text-ink transition-colors">Features</a>
-            <a href="#pricing"  className="hover:text-ink transition-colors">Pricing</a>
-            <a href="#"         className="hover:text-ink transition-colors">For Schools</a>
+            <a href="#pricing" className="hover:text-ink transition-colors">Pricing</a>
+            <a href="#" className="hover:text-ink transition-colors">For Schools</a>
           </div>
           <Link href="/auth/login"
             className="btn-primary text-sm px-5 py-2.5">
@@ -58,7 +58,7 @@ export default function LandingPage() {
           </div>
           <div className="mt-10 flex items-center gap-3">
             <div className="flex -space-x-2">
-              {["#F4A261","#A8DADC","#8CB8D0","#F9A875"].map((c, i) => (
+              {["#F4A261", "#A8DADC", "#8CB8D0", "#F9A875"].map((c, i) => (
                 <div key={i} className="w-8 h-8 rounded-full border-2 border-cream" style={{ background: c }} />
               ))}
             </div>
@@ -79,10 +79,10 @@ export default function LandingPage() {
               <span className="badge bg-sage-light text-sage-dark">8/12 ✓</span>
             </div>
             {[
-              { name: "Abby Thornton",  present: true,  allergy: "Peanuts" },
-              { name: "Ben Okafor",     present: true,  allergy: null },
-              { name: "Chloe Reyes",    present: false, allergy: "Dairy" },
-              { name: "Dylan Park",     present: true,  allergy: null },
+              { name: "Abby Thornton", present: true, allergy: "Peanuts" },
+              { name: "Ben Okafor", present: true, allergy: null },
+              { name: "Chloe Reyes", present: false, allergy: "Dairy" },
+              { name: "Dylan Park", present: true, allergy: null },
             ].map((s, i) => (
               <div key={i} className={`flex items-center gap-3 px-5 py-3.5 border-b border-cream-border ${s.present ? "bg-sage/5" : "bg-white"}`}>
                 <div className={`w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center text-xs font-black
@@ -97,7 +97,7 @@ export default function LandingPage() {
                   ${s.present ? "bg-sage shadow-sage" : "bg-cream-deep"}`}>
                   {s.present && (
                     <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
-                      <path d="M2 6L6 10L14 2" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M2 6L6 10L14 2" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                   )}
                 </div>
@@ -126,9 +126,9 @@ export default function LandingPage() {
           </h2>
           <div className="grid md:grid-cols-3 gap-10">
             {[
-              { n:"01", e:"📸", h:"Upload or snap",   b:"Photo, spreadsheet, or paste. Gemini AI extracts every name and column automatically." },
-              { n:"02", e:"🗂️", h:"Map & customize",  b:"Confirm column mappings. Add allergies, pickup location — data that persists every session." },
-              { n:"03", e:"✅", h:"Check in & notify", b:"Tap to mark students present. Submit when done — notifications fire automatically." },
+              { n: "01", e: "📸", h: "Upload or snap", b: "Photo, spreadsheet, or paste. Gemini AI extracts every name and column automatically." },
+              { n: "02", e: "🗂️", h: "Map & customize", b: "Confirm column mappings. Add allergies, pickup location — data that persists every session." },
+              { n: "03", e: "✅", h: "Check in & notify", b: "Tap to mark students present. Submit when done — notifications fire automatically." },
             ].map((s, i) => (
               <div key={i} className="text-center">
                 <p className="text-xs font-black text-terra tracking-widest mb-3">{s.n}</p>
@@ -162,9 +162,9 @@ export default function LandingPage() {
           <h2 className="font-display font-black text-4xl text-ink text-center tracking-tight mb-14">Simple, honest pricing</h2>
           <div className="grid md:grid-cols-3 gap-6">
             {[
-              { tier:"🐑 Free",     price:"$0/mo",   features:["3 lists total","20 names / list","Basic check-in","Session history"], cta:"Start free",    highlight:false },
-              { tier:"🐄 Standard", price:"$12/mo",  features:["Unlimited lists","Unlimited names","Custom columns","QR code check-in","Analytics"], cta:"Get Standard", highlight:false },
-              { tier:"🦬 Pro",      price:"$29/mo",  features:["Everything in Standard","SMS & email notifications","Guardian alerts","Emergency broadcasts","Priority support"], cta:"Get Pro",      highlight:true },
+              { tier: "🐑 Free", price: "$0/mo", features: ["3 lists total", "20 names / list", "Basic check-in", "Notifications (BETA only)"], cta: "Start free", highlight: false },
+              { tier: "🐄 Standard", price: "$12/mo", features: ["Unlimited lists", "Unlimited names", "Custom columns", "QR code check-in", "Analytics"], cta: "Get Standard", highlight: false },
+              { tier: "🦬 Pro", price: "$29/mo", features: ["Everything in Standard", "SMS & email notifications", "Guardian alerts", "Emergency broadcasts", "Priority support"], cta: "Get Pro", highlight: true },
             ].map((p, i) => (
               <div key={i} className={`rounded-3xl p-8 border ${p.highlight ? "bg-terra border-terra shadow-terra text-white" : "bg-white border-cream-border"}`}>
                 <p className="font-display font-black text-xl mb-1">{p.tier}</p>

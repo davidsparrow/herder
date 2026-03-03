@@ -13,35 +13,35 @@ interface PlanOverride {
 }
 
 const DEFAULT_OVERRIDES: Record<PlanTier, PlanOverride> = {
-  free:     { maxLists: 3,    maxNamesPerList: 20,   customColumns: false, notifications: false },
-  standard: { maxLists: null, maxNamesPerList: null,  customColumns: true,  notifications: false },
-  pro:      { maxLists: null, maxNamesPerList: null,  customColumns: true,  notifications: true  },
+  free: { maxLists: 3, maxNamesPerList: 20, customColumns: false, notifications: true }, // MVP: Enabled for free
+  standard: { maxLists: null, maxNamesPerList: null, customColumns: true, notifications: false },
+  pro: { maxLists: null, maxNamesPerList: null, customColumns: true, notifications: true },
 };
 
 const GLOBAL_COLUMNS_INIT = [
-  { id: "c1", name: "Guardian Phone",    type: "phone",  required: true  },
-  { id: "c2", name: "Allergies",         type: "text",   required: false },
-  { id: "c3", name: "Pickup Location",   type: "text",   required: false },
-  { id: "c4", name: "Notif. Channel",    type: "select", required: false },
+  { id: "c1", name: "Guardian Phone", type: "phone", required: true },
+  { id: "c2", name: "Allergies", type: "text", required: false },
+  { id: "c3", name: "Pickup Location", type: "text", required: false },
+  { id: "c4", name: "Notif. Channel", type: "select", required: false },
   { id: "c5", name: "Notif. Preference", type: "select", required: false },
 ];
 
 const NOTIF_RULES_INIT = [
-  { event: "Check-in submitted",  recipients: "Admin + Teachers",  channel: "Email",    active: true },
-  { event: "Student absent",      recipients: "Guardian",           channel: "SMS",      active: true },
-  { event: "Student checked in",  recipients: "Guardian",           channel: "SMS",      active: true },
-  { event: "Off-campus arrival",  recipients: "Guardian + Admin",   channel: "SMS",      active: false },
-  { event: "Emergency alert",     recipients: "All",                channel: "SMS+Email",active: true },
+  { event: "Check-in submitted", recipients: "Admin + Teachers", channel: "Email", active: true },
+  { event: "Student absent", recipients: "Guardian", channel: "SMS", active: true },
+  { event: "Student checked in", recipients: "Guardian", channel: "SMS", active: true },
+  { event: "Off-campus arrival", recipients: "Guardian + Admin", channel: "SMS", active: false },
+  { event: "Emergency alert", recipients: "All", channel: "SMS+Email", active: true },
 ];
 
 type AdminTab = "plan" | "columns" | "notifications" | "users";
 
 export default function AdminPage() {
-  const [tab, setTab]               = useState<AdminTab>("plan");
-  const [overrides, setOverrides]   = useState(DEFAULT_OVERRIDES);
-  const [columns, setColumns]       = useState(GLOBAL_COLUMNS_INIT);
-  const [rules, setRules]           = useState(NOTIF_RULES_INIT);
-  const [saved, setSaved]           = useState(false);
+  const [tab, setTab] = useState<AdminTab>("plan");
+  const [overrides, setOverrides] = useState(DEFAULT_OVERRIDES);
+  const [columns, setColumns] = useState(GLOBAL_COLUMNS_INIT);
+  const [rules, setRules] = useState(NOTIF_RULES_INIT);
+  const [saved, setSaved] = useState(false);
 
   const save = () => {
     // In production: POST /api/admin/settings
@@ -50,10 +50,10 @@ export default function AdminPage() {
   };
 
   const TABS: { id: AdminTab; label: string }[] = [
-    { id: "plan",          label: "Plan Limits" },
-    { id: "columns",       label: "Custom Columns" },
+    { id: "plan", label: "Plan Limits" },
+    { id: "columns", label: "Custom Columns" },
     { id: "notifications", label: "Notification Rules" },
-    { id: "users",         label: "Users" },
+    { id: "users", label: "Users" },
   ];
 
   return (
@@ -73,9 +73,8 @@ export default function AdminPage() {
         <div className="flex gap-1">
           {TABS.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                tab === t.id ? "bg-ink text-white" : "text-ink-light hover:bg-cream-deep hover:text-ink"
-              }`}>
+              className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${tab === t.id ? "bg-ink text-white" : "text-ink-light hover:bg-cream-deep hover:text-ink"
+                }`}>
               {t.label}
             </button>
           ))}
@@ -92,7 +91,7 @@ export default function AdminPage() {
             </p>
             {TIERS.map(tier => {
               const plan = PLANS[tier];
-              const ov   = overrides[tier];
+              const ov = overrides[tier];
               return (
                 <div key={tier} className="card p-6">
                   <div className="flex items-center gap-3 mb-5">
@@ -137,8 +136,8 @@ export default function AdminPage() {
 
                   <div className="flex gap-6">
                     {[
-                      { key: "customColumns" as const,  label: "Custom Columns" },
-                      { key: "notifications" as const,  label: "Notifications" },
+                      { key: "customColumns" as const, label: "Custom Columns" },
+                      { key: "notifications" as const, label: "Notifications" },
                     ].map(f => (
                       <label key={f.key} className="flex items-center gap-2.5 cursor-pointer">
                         <button
@@ -146,13 +145,11 @@ export default function AdminPage() {
                             ...p,
                             [tier]: { ...p[tier], [f.key]: !p[tier][f.key] }
                           }))}
-                          className={`w-10 h-6 rounded-full relative transition-colors duration-200 ${
-                            ov[f.key] ? "bg-sage" : "bg-cream-border"
-                          }`}
+                          className={`w-10 h-6 rounded-full relative transition-colors duration-200 ${ov[f.key] ? "bg-sage" : "bg-cream-border"
+                            }`}
                         >
-                          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all duration-200 ${
-                            ov[f.key] ? "left-5" : "left-1"
-                          }`} />
+                          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all duration-200 ${ov[f.key] ? "left-5" : "left-1"
+                            }`} />
                         </button>
                         <span className="text-sm font-semibold text-ink-mid">{f.label}</span>
                       </label>
@@ -178,9 +175,9 @@ export default function AdminPage() {
                 <div key={col.id} className="grid grid-cols-[1fr_100px_80px_80px] gap-3 px-5 py-3.5 border-b border-cream-border items-center last:border-0">
                   <input value={col.name} onChange={e => setColumns(c => c.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
                     className="input-warm py-2 text-sm" />
-                  <select value={col.type} onChange={e => setColumns(c => c.map((x, j) => j === i ? { ...x, type: e.target.value as "text"|"phone"|"select"|"boolean" } : x))}
+                  <select value={col.type} onChange={e => setColumns(c => c.map((x, j) => j === i ? { ...x, type: e.target.value as "text" | "phone" | "select" | "boolean" } : x))}
                     className="input-warm py-2 text-sm">
-                    {["text","phone","select","boolean"].map(t => <option key={t}>{t}</option>)}
+                    {["text", "phone", "select", "boolean"].map(t => <option key={t}>{t}</option>)}
                   </select>
                   <div className="flex justify-center">
                     <button onClick={() => setColumns(c => c.map((x, j) => j === i ? { ...x, required: !x.required } : x))}
@@ -206,7 +203,7 @@ export default function AdminPage() {
         {tab === "notifications" && (
           <div className="max-w-2xl space-y-4">
             <div className="bg-terra-light border border-terra/30 rounded-2xl px-5 py-4 text-sm text-terra-dark">
-              ⚠ Notification rules only fire on <strong>Pro plan</strong>. Upgrade to enable automated SMS + email.
+              ℹ Notification rules fire on <strong>Free (BETA only) and Pro plans</strong>. Automated SMS + email are temporarily available for free users.
             </div>
             <div className="card overflow-hidden">
               <div className="grid grid-cols-[2fr_1.5fr_1fr_64px] gap-3 px-5 py-3 bg-parchment border-b border-cream-border text-xs font-bold uppercase tracking-widest text-ink-light">
@@ -234,12 +231,12 @@ export default function AdminPage() {
           <div className="max-w-2xl space-y-4">
             <div className="card overflow-hidden">
               {[
-                { name: "Ms. Rivera",   role: "admin",   email: "rivera@school.edu",  tier: "pro",      absent: false },
-                { name: "Mr. Johnson",  role: "teacher", email: "johnson@school.edu", tier: "standard", absent: false },
-                { name: "Ms. Chen",     role: "teacher", email: "chen@school.edu",    tier: "standard", absent: false },
-                { name: "Coach Davis",  role: "teacher", email: "davis@school.edu",   tier: "free",     absent: true  },
+                { name: "Ms. Rivera", role: "admin", email: "rivera@school.edu", tier: "pro", absent: false },
+                { name: "Mr. Johnson", role: "teacher", email: "johnson@school.edu", tier: "standard", absent: false },
+                { name: "Ms. Chen", role: "teacher", email: "chen@school.edu", tier: "standard", absent: false },
+                { name: "Coach Davis", role: "teacher", email: "davis@school.edu", tier: "free", absent: true },
               ].map((u, i, arr) => (
-                <div key={i} className={`flex items-center gap-4 px-5 py-4 ${i < arr.length-1 ? "border-b border-cream-border" : ""}`}>
+                <div key={i} className={`flex items-center gap-4 px-5 py-4 ${i < arr.length - 1 ? "border-b border-cream-border" : ""}`}>
                   <div className="w-10 h-10 rounded-2xl bg-cream-deep flex items-center justify-center text-sm font-black text-ink-light">
                     {u.name.split(" ").map(n => n[0]).join("")}
                   </div>
@@ -251,10 +248,9 @@ export default function AdminPage() {
                     <span className={`badge ${u.role === "admin" ? "bg-terra-light text-terra-dark" : "bg-sky-light text-sky"}`}>
                       {u.role}
                     </span>
-                    <span className={`badge ${
-                      u.tier === "pro" ? "bg-terra-light text-terra-dark" :
+                    <span className={`badge ${u.tier === "pro" ? "bg-terra-light text-terra-dark" :
                       u.tier === "standard" ? "bg-sky-light text-sky" : "bg-cream-deep text-ink-light"
-                    }`}>{PLANS[u.tier as PlanTier].badge} {u.tier}</span>
+                      }`}>{PLANS[u.tier as PlanTier].badge} {u.tier}</span>
                     {u.absent && <span className="badge bg-blush-light text-blush">Absent</span>}
                   </div>
                 </div>

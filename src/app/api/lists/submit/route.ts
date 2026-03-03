@@ -59,7 +59,8 @@ export async function POST(req: NextRequest) {
       .eq("id", session_id)
       .single();
 
-    const className = (session?.checkin_lists as { name: string } | null)?.name ?? "class";
+    const lists = session?.checkin_lists as any;
+    const className = (Array.isArray(lists) ? lists[0]?.name : lists?.name) || "class";
     const sessionDate = session?.session_date ?? new Date().toLocaleDateString();
 
     // Fetch students with guardian email from custom_data
@@ -71,11 +72,11 @@ export async function POST(req: NextRequest) {
 
     if (students) {
       for (const att of attendance) {
-        const student = students.find(s => s.id === att.student_id);
+        const student = students.find((s: any) => s.id === att.student_id);
         if (!student) continue;
 
         const guardianEmail = student.custom_data?.guardian_email as string | undefined;
-        const guardianName  = student.custom_data?.guardian_name  as string | undefined ?? "Guardian";
+        const guardianName = student.custom_data?.guardian_name as string | undefined ?? "Guardian";
 
         if (!guardianEmail) continue;
 

@@ -1,0 +1,1 @@
+self.__NEXT_FONT_MANIFEST='{"pages":{},"app":{"/Users/davidsparrow/Documents/_appDevelopment/Dev/herder/src/app/layout":["static/media/6e8c7cb283336a9d-s.p.woff2","static/media/ee40bb094c99a29a-s.p.woff2"]},"appUsingSizeAdjust":true,"pagesUsingSizeAdjust":false}';
