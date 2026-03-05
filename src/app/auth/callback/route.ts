@@ -3,9 +3,14 @@ import { createClient } from "@/lib/supabase/server";
 import { sendWelcomeEmail } from "@/lib/email";
 
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const next = searchParams.get("next") ?? "/dashboard";
+
+  // Build origin from host header to work correctly on Vercel
+  const host = request.headers.get("host") ?? "";
+  const proto = host.startsWith("localhost") ? "http" : "https";
+  const origin = `${proto}://${host}`;
 
   if (code) {
     const supabase = createClient();
