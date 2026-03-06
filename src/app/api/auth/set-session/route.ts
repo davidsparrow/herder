@@ -5,7 +5,7 @@ import { createServerClient } from "@supabase/ssr";
 // signInWithPassword / signUp, sets them as proper server-readable cookies,
 // then redirects to the destination.
 export async function POST(req: NextRequest) {
-    const { access_token, refresh_token, next } = await req.json();
+    const { access_token, refresh_token } = await req.json();
 
     if (!access_token || !refresh_token) {
         return NextResponse.json({ error: "Missing tokens" }, { status: 400 });
@@ -19,11 +19,14 @@ export async function POST(req: NextRequest) {
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
         {
             cookies: {
-                getAll() { return []; },
-                setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
-                    cookiesToSet.forEach(({ name, value, options }) =>
-                        response.cookies.set(name, value, { ...(options ?? {}), path: "/" })
-                    );
+                get(name: string) {
+                    return req.cookies.get(name)?.value;
+                },
+                set(name: string, value: string, options: Record<string, unknown> = {}) {
+                    response.cookies.set(name, value, { ...options, path: "/" });
+                },
+                remove(name: string, options: Record<string, unknown> = {}) {
+                    response.cookies.set(name, "", { ...options, path: "/", maxAge: 0 });
                 },
             },
         }

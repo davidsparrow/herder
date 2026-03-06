@@ -2,7 +2,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
@@ -20,6 +20,7 @@ function AuthErrorBanner() {
 }
 
 type Mode = "magic" | "password" | "signup";
+const DEBUG_STORAGE_KEY = "herder_auth_debug";
 
 export default function LoginPage() {
   const supabase = createClient();
@@ -30,10 +31,80 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("password");
+  const [debugLog, setDebugLog] = useState<string[]>([]);
+  const [clientSessionStatus, setClientSessionStatus] = useState("Checking client session…");
+  const [clientUserStatus, setClientUserStatus] = useState("Checking client user…");
+
+  const appendDebug = (message: string) => {
+    const line = `${new Date().toLocaleTimeString()} — ${message}`;
+    setDebugLog(prev => {
+      const next = [...prev, line].slice(-12);
+      window.sessionStorage.setItem(DEBUG_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const clearDebug = () => {
+    window.sessionStorage.removeItem(DEBUG_STORAGE_KEY);
+    setDebugLog([]);
+  };
+
+  useEffect(() => {
+    const stored = window.sessionStorage.getItem(DEBUG_STORAGE_KEY);
+    let nextLog: string[] = [];
+
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) nextLog = parsed.filter((item): item is string => typeof item === "string");
+      } catch {
+        window.sessionStorage.removeItem(DEBUG_STORAGE_KEY);
+      }
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const authDebug = params.get("auth_debug");
+    const from = params.get("from");
+    const detail = params.get("auth_detail");
+    if (authDebug) {
+      nextLog = [
+        ...nextLog,
+        `Server redirect reason: ${authDebug}${from ? ` (from ${from})` : ""}${detail ? ` — ${detail}` : ""}`,
+      ].slice(-12);
+      window.sessionStorage.setItem(DEBUG_STORAGE_KEY, JSON.stringify(nextLog));
+    }
+
+    setDebugLog(nextLog);
+
+    const loadClientAuthState = async () => {
+      const [{ data: sessionData, error: sessionError }, { data: userData, error: userError }] = await Promise.all([
+        supabase.auth.getSession(),
+        supabase.auth.getUser(),
+      ]);
+
+      setClientSessionStatus(
+        sessionError
+          ? `error: ${sessionError.message}`
+          : sessionData.session
+            ? "present"
+            : "missing"
+      );
+      setClientUserStatus(
+        userError
+          ? `error: ${userError.message}`
+          : userData.user
+            ? `present (${userData.user.id.slice(0, 8)}…)`
+            : "missing"
+      );
+    };
+
+    loadClientAuthState();
+  }, []);
 
   const sendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
+    appendDebug("Magic link sign-in started");
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
@@ -42,53 +113,109 @@ export default function LoginPage() {
       },
     });
     setLoading(false);
-    if (error) { setError(error.message); return; }
+    if (error) {
+      appendDebug(`Magic link error: ${error.message}`);
+      setError(error.message);
+      return;
+    }
+    appendDebug("Magic link email sent successfully");
     setSent(true);
   };
 
   // Exchange tokens server-side so the middleware can read the session cookie
   const serverSetSession = async (access_token: string, refresh_token: string) => {
-    await fetch("/api/auth/set-session", {
+    const response = await fetch("/api/auth/set-session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ access_token, refresh_token }),
     });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.error ?? `set-session failed with status ${response.status}`);
+    }
+
+    return payload;
   };
 
   const signInWithPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
+    appendDebug("Password sign-in started");
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) { setLoading(false); setError(error.message); return; }
-    if (data.session) {
-      await serverSetSession(data.session.access_token, data.session.refresh_token);
+    if (error) {
+      appendDebug(`Password sign-in error: ${error.message}`);
+      setLoading(false);
+      setError(error.message);
+      return;
     }
+    appendDebug(`Password sign-in returned user: ${data.user?.id?.slice(0, 8) ?? "none"}`);
+    appendDebug(`Password sign-in returned session: ${data.session ? "yes" : "no"}`);
+    if (data.session) {
+      try {
+        await serverSetSession(data.session.access_token, data.session.refresh_token);
+        appendDebug("Server session cookie write succeeded");
+      } catch (sessionError) {
+        const message = sessionError instanceof Error ? sessionError.message : "Unknown session exchange error";
+        appendDebug(`Server session cookie write failed: ${message}`);
+        setLoading(false);
+        setError(message);
+        return;
+      }
+    }
+    appendDebug("Redirecting browser to /dashboard");
     window.location.href = "/dashboard";
   };
 
   const signUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
+    appendDebug("Create account started");
     const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password });
-    if (signUpError) { setLoading(false); setError(signUpError.message); return; }
+    if (signUpError) {
+      appendDebug(`Create account error: ${signUpError.message}`);
+      setLoading(false);
+      setError(signUpError.message);
+      return;
+    }
+    appendDebug(`Create account returned user: ${signUpData.user?.id?.slice(0, 8) ?? "none"}`);
 
     // If no session from signup (email confirm ON), immediately sign in
     let session = signUpData?.session;
     if (!session) {
+      appendDebug("Signup returned no session; attempting password sign-in fallback");
       const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-      if (signInError) { setLoading(false); setError(signInError.message); return; }
+      if (signInError) {
+        appendDebug(`Fallback password sign-in error: ${signInError.message}`);
+        setLoading(false);
+        setError(signInError.message);
+        return;
+      }
       session = signInData?.session ?? null;
     }
 
+    appendDebug(`Final signup session available: ${session ? "yes" : "no"}`);
+
     if (session) {
-      await serverSetSession(session.access_token, session.refresh_token);
+      try {
+        await serverSetSession(session.access_token, session.refresh_token);
+        appendDebug("Server session cookie write succeeded after signup");
+      } catch (sessionError) {
+        const message = sessionError instanceof Error ? sessionError.message : "Unknown session exchange error";
+        appendDebug(`Server session cookie write failed after signup: ${message}`);
+        setLoading(false);
+        setError(message);
+        return;
+      }
     }
 
     // Trigger in DB auto-creates org + profile
+    appendDebug("Redirecting browser to /onboard");
     window.location.href = "/onboard";
   };
 
   const signInWithGoogle = async () => {
+    appendDebug("Google OAuth redirect started");
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: `${window.location.origin}/auth/callback` },
@@ -155,6 +282,29 @@ export default function LoginPage() {
 
             {/* Auth error from callback */}
             <Suspense><AuthErrorBanner /></Suspense>
+
+            <div className="bg-white border border-sky/30 rounded-2xl px-4 py-3 mb-4 text-xs text-ink-light space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <strong className="text-ink text-sm">Auth debug</strong>
+                <button type="button" onClick={clearDebug} className="text-terra font-semibold hover:underline">
+                  Clear
+                </button>
+              </div>
+              <div>Client session: <span className="text-ink font-semibold">{clientSessionStatus}</span></div>
+              <div>Client user: <span className="text-ink font-semibold">{clientUserStatus}</span></div>
+              <div>
+                <div className="text-ink font-semibold mb-1">Recent auth events</div>
+                {debugLog.length ? (
+                  <ul className="space-y-1 list-disc pl-4">
+                    {debugLog.map((line, index) => (
+                      <li key={`${index}-${line}`}>{line}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No debug events yet.</p>
+                )}
+              </div>
+            </div>
 
             {success && (
               <div className="bg-sage-light text-sage-dark text-sm font-medium rounded-2xl px-4 py-3 mb-4">
