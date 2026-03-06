@@ -1,20 +1,31 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 
-export default function LoginPage() {
-  const supabase = createClient();
+// Separate component so useSearchParams is inside a Suspense boundary
+function AuthErrorBanner() {
   const searchParams = useSearchParams();
   const authError = searchParams.get("error");
   const authDetail = searchParams.get("detail");
+
+  if (!authError) return null;
+
+  return (
+    <div className="bg-blush-light text-blush text-sm font-medium rounded-2xl px-4 py-3">
+      <strong>Sign-in failed.</strong>{authDetail ? ` ${authDetail}` : " Please try again or request a new link."}
+    </div>
+  );
+}
+
+export default function LoginPage() {
+  const supabase = createClient();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<"magic" | "oauth">("magic");
 
   const sendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,11 +96,10 @@ export default function LoginPage() {
                   className="input-warm"
                 />
               </div>
-              {authError && (
-                <div className="bg-blush-light text-blush text-sm font-medium rounded-2xl px-4 py-3">
-                  <strong>Sign-in failed.</strong>{authDetail ? ` ${authDetail}` : " Please try again or request a new link."}
-                </div>
-              )}
+              {/* Auth error from callback — wrapped in Suspense per Next.js requirement */}
+              <Suspense>
+                <AuthErrorBanner />
+              </Suspense>
               {error && (
                 <div className="bg-blush-light text-blush text-sm font-medium rounded-2xl px-4 py-3">
                   {error}
