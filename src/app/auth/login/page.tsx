@@ -46,36 +46,32 @@ export default function LoginPage() {
     setSent(true);
   };
 
+  const ensureProfile = async () => {
+    const res = await fetch("/api/auth/setup-profile", { method: "POST" });
+    const json = await res.json();
+    return json; // { exists: true } or { created: true } or { error: ... }
+  };
+
   const signInWithPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (error) { setError(error.message); return; }
-    // Check if profile exists — if not, go to onboard; otherwise dashboard
-    const { data: profile } = await supabase
-      .from("profiles").select("id").eq("id", data.user.id).single();
-    window.location.href = profile ? "/dashboard" : "/onboard";
+    if (error) { setLoading(false); setError(error.message); return; }
+    if (!data.user) { setLoading(false); setError("Sign in failed."); return; }
+    // Ensure profile exists (runs server-side with service role, bypasses RLS)
+    await ensureProfile();
+    window.location.href = "/dashboard";
   };
 
   const signUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
     const { data, error } = await supabase.auth.signUp({ email, password });
-    setLoading(false);
-    if (error) { setError(error.message); return; }
-    if (!data.user) { setError("Sign up failed, please try again."); return; }
-
-    // Create org + profile immediately (same as /auth/callback does for magic link)
-    const emailDomain = email.split("@")[1] ?? "my-org";
-    const { data: org } = await supabase
-      .from("orgs").insert({ name: emailDomain, plan_tier: "free" }).select().single();
-    if (org) {
-      await supabase.from("profiles").insert({
-        id: data.user.id, email, full_name: null,
-        role: "admin", org_id: org.id, plan_tier: "free",
-      });
-    }
+    if (error) { setLoading(false); setError(error.message); return; }
+    if (!data.user) { setLoading(false); setError("Sign up failed, please try again."); return; }
+    // Create org + profile via server API (bypasses RLS)
+    const result = await ensureProfile();
+    if (result.error) { setLoading(false); setError(`Profile setup failed: ${result.error}`); return; }
     window.location.href = "/onboard";
   };
 

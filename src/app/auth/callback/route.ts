@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { sendWelcomeEmail } from "@/lib/email";
 
 export async function GET(request: NextRequest) {
@@ -54,16 +54,19 @@ export async function GET(request: NextRequest) {
     .single();
 
   if (!existing) {
-    // ── First-time sign-in: create org + profile on Free plan ──────────
+    // ── First-time sign-in: create org + profile using service role (bypasses RLS) ──
+    const admin = createServiceClient();
     const emailDomain = user.email?.split("@")[1] ?? "my-org";
-    const { data: org } = await supabase
+    const { data: org, error: orgErr } = await admin
       .from("orgs")
       .insert({ name: emailDomain, plan_tier: "free" })
       .select()
       .single();
 
+    console.log("[auth/callback] org insert:", { org: org?.id, error: orgErr?.message });
+
     if (org) {
-      await supabase.from("profiles").insert({
+      const { error: profErr } = await admin.from("profiles").insert({
         id: user.id,
         email: user.email!,
         full_name: user.user_metadata?.full_name ?? null,
@@ -71,6 +74,7 @@ export async function GET(request: NextRequest) {
         org_id: org.id,
         plan_tier: "free",
       });
+      console.log("[auth/callback] profile insert error:", profErr?.message);
     }
 
     // Send welcome email (non-blocking)
