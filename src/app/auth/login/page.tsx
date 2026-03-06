@@ -46,37 +46,45 @@ export default function LoginPage() {
     setSent(true);
   };
 
+  // Exchange tokens server-side so the middleware can read the session cookie
+  const serverSetSession = async (access_token: string, refresh_token: string) => {
+    await fetch("/api/auth/set-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_token, refresh_token }),
+    });
+  };
+
   const signInWithPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
-    console.log("[login] attempting password sign in for:", email);
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    console.log("[login] signInWithPassword result:", { userId: data?.user?.id, error: error?.message });
-    setLoading(false);
-    if (error) { setError(error.message); return; }
-    console.log("[login] session established, redirecting to /dashboard");
+    if (error) { setLoading(false); setError(error.message); return; }
+    if (data.session) {
+      await serverSetSession(data.session.access_token, data.session.refresh_token);
+    }
     window.location.href = "/dashboard";
   };
 
   const signUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
-    console.log("[login] attempting signup for:", email);
     const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password });
-    console.log("[login] signUp result:", { userId: signUpData?.user?.id, session: !!signUpData?.session, error: signUpError?.message });
-
     if (signUpError) { setLoading(false); setError(signUpError.message); return; }
 
-    // If email confirmation is ON, signUp won't create a session — sign in immediately
-    if (!signUpData.session) {
-      console.log("[login] No session from signUp, attempting immediate signIn...");
+    // If no session from signup (email confirm ON), immediately sign in
+    let session = signUpData?.session;
+    if (!session) {
       const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-      console.log("[login] immediate signIn result:", { userId: signInData?.user?.id, session: !!signInData?.session, error: signInError?.message });
       if (signInError) { setLoading(false); setError(signInError.message); return; }
+      session = signInData?.session ?? null;
     }
 
-    // Trigger in DB auto-creates org + profile on insert into auth.users
-    console.log("[login] signup+session done, redirecting to /onboard");
+    if (session) {
+      await serverSetSession(session.access_token, session.refresh_token);
+    }
+
+    // Trigger in DB auto-creates org + profile
     window.location.href = "/onboard";
   };
 
