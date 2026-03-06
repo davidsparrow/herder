@@ -46,32 +46,22 @@ export default function LoginPage() {
     setSent(true);
   };
 
-  const ensureProfile = async () => {
-    const res = await fetch("/api/auth/setup-profile", { method: "POST" });
-    const json = await res.json();
-    return json; // { exists: true } or { created: true } or { error: ... }
-  };
-
   const signInWithPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) { setLoading(false); setError(error.message); return; }
-    if (!data.user) { setLoading(false); setError("Sign in failed."); return; }
-    // Ensure profile exists (runs server-side with service role, bypasses RLS)
-    await ensureProfile();
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (error) { setError(error.message); return; }
     window.location.href = "/dashboard";
   };
 
   const signUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) { setLoading(false); setError(error.message); return; }
-    if (!data.user) { setLoading(false); setError("Sign up failed, please try again."); return; }
-    // Create org + profile via server API (bypasses RLS)
-    const result = await ensureProfile();
-    if (result.error) { setLoading(false); setError(`Profile setup failed: ${result.error}`); return; }
+    const { error } = await supabase.auth.signUp({ email, password });
+    setLoading(false);
+    if (error) { setError(error.message); return; }
+    // Trigger in DB auto-creates org + profile on insert into auth.users
     window.location.href = "/onboard";
   };
 
