@@ -51,11 +51,14 @@ export async function GET(request: NextRequest) {
     .from("profiles")
     .select("id")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
 
   console.log("[auth/callback] existing profile check:", { userId: user.id, hasProfile: !!existing, existingError });
   if (existingError) {
     console.error("[auth/callback] Supabase profile check error (full):", JSON.stringify(existingError, null, 2));
+    return NextResponse.redirect(
+      `${origin}/auth/login?error=profile_lookup_failed&detail=${encodeURIComponent(existingError.message)}`
+    );
   }
 
   if (!existing) {

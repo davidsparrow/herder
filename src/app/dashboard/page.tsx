@@ -13,15 +13,33 @@ export default async function DashboardPage() {
     .from("profiles")
     .select("*")
     .eq("id", user.id)
-    .single() as { data: Profile | null; error: any };
+    .maybeSingle() as { data: Profile | null; error: any };
 
   console.log("[dashboard-page] profile fetch:", { userId: user.id, hasProfile: !!profile, profileError });
   if (profileError) {
     console.error("[dashboard-page] Supabase profile error (full):", JSON.stringify(profileError, null, 2));
   }
 
-  // If no profile yet (e.g. password signup before profile creation) send to onboard
-  if (!profile) redirect("/onboard");
+  if (profileError || !profile) {
+    return (
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-2xl rounded-3xl border border-terra/20 bg-white p-6 shadow-warm">
+          <p className="text-xs font-black uppercase tracking-[0.18em] text-terra-dark">Signed in</p>
+          <h1 className="mt-2 font-display text-2xl font-black tracking-tight text-ink">
+            We couldn't load your workspace details yet.
+          </h1>
+          <p className="mt-3 text-sm leading-relaxed text-ink-light">
+            Your account is still signed in. Finish onboarding to complete setup, or try again after the profile issue clears.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link href="/onboard" className="btn-primary px-5 py-3 text-sm">
+              Continue setup →
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const plan = PLANS[profile.plan_tier];
 

@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { PLANS } from "@/lib/plans";
 import type { Profile } from "@/lib/types";
+import { getSignedInIdentity } from "@/lib/user-identity";
 
 const NAV = [
   { href: "/dashboard",         icon: "⊞", label: "Dashboard" },
@@ -22,7 +23,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     .from("profiles")
     .select("*")
     .eq("id", user.id)
-    .single() as { data: Profile | null; error: any };
+    .maybeSingle() as { data: Profile | null; error: any };
 
   console.log("[dashboard-layout] profile fetch:", { userId: user.id, hasProfile: !!profile, profileError });
   if (profileError) {
@@ -30,6 +31,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
 
   const plan = profile ? PLANS[profile.plan_tier] : PLANS.free;
+  const identity = getSignedInIdentity(profile, user);
 
   const signOut = async () => {
     "use server";
@@ -81,12 +83,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
             <span className="badge bg-cream-deep text-ink-light">Spring 2026</span>
             <span className="badge bg-sage-light text-sage-dark">● Live</span>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-semibold text-ink-light">
-              {profile?.full_name ?? profile?.email ?? ""}
-            </span>
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-terra to-[#F0924A] flex items-center justify-center text-white text-xs font-black">
-              {(profile?.full_name ?? profile?.email ?? "?")[0].toUpperCase()}
+          <div className="flex items-center gap-3 rounded-2xl border border-cream-border bg-cream px-3 py-2 shadow-sm">
+            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-terra to-[#F0924A] flex items-center justify-center text-white text-xs font-black">
+              {identity.initials}
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-terra-dark">Signed in</p>
+              <p className="max-w-[220px] truncate text-sm font-semibold text-ink">{identity.label}</p>
             </div>
           </div>
         </header>

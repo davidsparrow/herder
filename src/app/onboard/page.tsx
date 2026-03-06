@@ -2,42 +2,105 @@
 
 export const dynamic = "force-dynamic";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { getSignedInIdentity } from "@/lib/user-identity";
+
+type AuthUser = {
+  email?: string | null;
+  user_metadata?: { full_name?: string | null } | null;
+} | null;
 
 export default function OnboardPage() {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const [name, setName] = useState("");
   const [orgName, setOrgName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser>(null);
+  const [identityReady, setIdentityReady] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!active) return;
+      setAuthUser(user);
+      setIdentityReady(true);
+    };
+
+    void loadUser();
+
+    return () => {
+      active = false;
+    };
+  }, [supabase]);
+
+  const identity = getSignedInIdentity(null, authUser);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
+    setError(null);
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { router.push("/auth/login"); return; }
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        router.push("/auth/login");
+        return;
+      }
 
-    // Update profile name
-    const { error: profileUpdateError } = await supabase.from("profiles").update({ full_name: name }).eq("id", user.id);
-    console.log("[onboard] profile update:", { userId: user.id, profileUpdateError });
+      const { data: profile, error: profileUpdateError } = await supabase
+        .from("profiles")
+        .update({ full_name: name })
+        .eq("id", user.id)
+        .select("org_id")
+        .single();
 
-    // Update org name
-    const { data: profile, error: profileFetchError } = await supabase.from("profiles").select("org_id").eq("id", user.id).single();
-    console.log("[onboard] profile fetch for org_id:", { profile, profileFetchError });
-    if (profile?.org_id) {
-      const { error: orgUpdateError } = await supabase.from("orgs").update({ name: orgName || name + "'s Org" }).eq("id", profile.org_id);
+      console.log("[onboard] profile update:", { userId: user.id, profile, profileUpdateError });
+
+      if (profileUpdateError || !profile?.org_id) {
+        setError(profileUpdateError?.message ?? "Could not save your profile.");
+        return;
+      }
+
+      const { error: orgUpdateError } = await supabase
+        .from("orgs")
+        .update({ name: orgName || `${name}'s Org` })
+        .eq("id", profile.org_id);
+
       console.log("[onboard] org update:", { orgId: profile.org_id, orgUpdateError });
-    }
 
-    router.push("/dashboard/upload");
+      if (orgUpdateError) {
+        setError(orgUpdateError.message);
+        return;
+      }
+
+      router.push("/dashboard/upload");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-cream flex flex-col items-center justify-center px-4">
+      <div className="mb-4 w-full max-w-md animate-float-up">
+        <div className="flex items-center gap-3 rounded-2xl border border-cream-border bg-white px-4 py-3 shadow-warm">
+          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-terra to-[#F0924A] flex items-center justify-center text-white text-sm font-black">
+            {identityReady ? identity.initials : "…"}
+          </div>
+          <div className="min-w-0">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-terra-dark">Signed in</p>
+            <p className="truncate text-sm font-semibold text-ink">
+              {identityReady ? identity.label : "Loading your account…"}
+            </p>
+          </div>
+        </div>
+      </div>
       <div className="text-5xl mb-6">🐑</div>
       <div className="card p-8 w-full max-w-md animate-float-up">
         <h1 className="font-display font-black text-2xl text-ink tracking-tight mb-2">Welcome to Herder!</h1>
@@ -46,6 +109,12 @@ export default function OnboardPage() {
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {error && (
+            <div className="bg-blush-light text-blush text-sm rounded-2xl px-4 py-3">
+              {error}
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">Your Name</label>
             <input value={name} onChange={e => setName(e.target.value)} required

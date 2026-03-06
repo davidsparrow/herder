@@ -9,8 +9,17 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     // Check if profile already exists
-    const { data: existing } = await supabase
-        .from("profiles").select("id").eq("id", user.id).single();
+    const { data: existing, error: existingError } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", user.id)
+        .maybeSingle();
+
+    if (existingError) {
+        console.error("[setup-profile] existing profile lookup failed:", existingError.message);
+        return NextResponse.json({ error: existingError.message }, { status: 500 });
+    }
+
     if (existing) return NextResponse.json({ exists: true });
 
     // Use service role client to bypass RLS for org + profile creation
