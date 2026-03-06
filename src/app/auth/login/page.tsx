@@ -49,23 +49,34 @@ export default function LoginPage() {
   const signInWithPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
     if (error) { setError(error.message); return; }
-    window.location.href = "/dashboard";
+    // Check if profile exists — if not, go to onboard; otherwise dashboard
+    const { data: profile } = await supabase
+      .from("profiles").select("id").eq("id", data.user.id).single();
+    window.location.href = profile ? "/dashboard" : "/onboard";
   };
 
   const signUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
-    });
+    const { data, error } = await supabase.auth.signUp({ email, password });
     setLoading(false);
     if (error) { setError(error.message); return; }
-    setSuccess("Account created! Check your email to confirm, or just sign in with your password now.");
+    if (!data.user) { setError("Sign up failed, please try again."); return; }
+
+    // Create org + profile immediately (same as /auth/callback does for magic link)
+    const emailDomain = email.split("@")[1] ?? "my-org";
+    const { data: org } = await supabase
+      .from("orgs").insert({ name: emailDomain, plan_tier: "free" }).select().single();
+    if (org) {
+      await supabase.from("profiles").insert({
+        id: data.user.id, email, full_name: null,
+        role: "admin", org_id: org.id, plan_tier: "free",
+      });
+    }
+    window.location.href = "/onboard";
   };
 
   const signInWithGoogle = async () => {
