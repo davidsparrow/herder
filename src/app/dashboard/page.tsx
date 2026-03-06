@@ -9,11 +9,16 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("*")
     .eq("id", user.id)
-    .single() as { data: Profile | null };
+    .single() as { data: Profile | null; error: any };
+
+  console.log("[dashboard-page] profile fetch:", { userId: user.id, hasProfile: !!profile, profileError });
+  if (profileError) {
+    console.error("[dashboard-page] Supabase profile error (full):", JSON.stringify(profileError, null, 2));
+  }
 
   // If no profile yet (e.g. password signup before profile creation) send to onboard
   if (!profile) redirect("/onboard");

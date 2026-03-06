@@ -18,11 +18,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("*")
     .eq("id", user.id)
-    .single() as { data: Profile | null };
+    .single() as { data: Profile | null; error: any };
+
+  console.log("[dashboard-layout] profile fetch:", { userId: user.id, hasProfile: !!profile, profileError });
+  if (profileError) {
+    console.error("[dashboard-layout] Supabase profile error (full):", JSON.stringify(profileError, null, 2));
+  }
 
   const plan = profile ? PLANS[profile.plan_tier] : PLANS.free;
 

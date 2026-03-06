@@ -11,23 +11,33 @@ export async function POST(req: NextRequest) {
 
   // Auth check
   const { data: { user }, error: authError } = await supabase.auth.getUser();
+  console.log("[upload] auth check:", { userId: user?.id, email: user?.email, authError: authError?.message ?? null });
   if (!user || authError) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   // Fetch profile to get plan + org
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("org_id, plan_tier")
     .eq("id", user.id)
     .single();
 
+  console.log("[upload] profile query:", { userId: user.id, profile, profileError });
+  if (profileError) {
+    console.error("[upload] Supabase profile error (full):", JSON.stringify(profileError, null, 2));
+  }
+
   if (!profile) return NextResponse.json({ error: "Profile not found" }, { status: 404 });
 
+  console.log("[upload] profile details:", { org_id: profile.org_id, plan_tier: profile.plan_tier });
+
   // Plan gate: count existing lists for this org
-  const { count } = await supabase
+  const { count, error: countError } = await supabase
     .from("checkin_lists")
     .select("*", { count: "exact", head: true })
     .eq("org_id", profile.org_id)
     .eq("archived", false);
+
+  console.log("[upload] checkin_lists count:", { count, countError: countError?.message ?? null });
 
   const gate = canCreateList(profile.plan_tier, count ?? 0);
   if (!gate.allowed) {

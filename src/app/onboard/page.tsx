@@ -22,12 +22,15 @@ export default function OnboardPage() {
     if (!user) { router.push("/auth/login"); return; }
 
     // Update profile name
-    await supabase.from("profiles").update({ full_name: name }).eq("id", user.id);
+    const { error: profileUpdateError } = await supabase.from("profiles").update({ full_name: name }).eq("id", user.id);
+    console.log("[onboard] profile update:", { userId: user.id, profileUpdateError });
 
     // Update org name
-    const { data: profile } = await supabase.from("profiles").select("org_id").eq("id", user.id).single();
+    const { data: profile, error: profileFetchError } = await supabase.from("profiles").select("org_id").eq("id", user.id).single();
+    console.log("[onboard] profile fetch for org_id:", { profile, profileFetchError });
     if (profile?.org_id) {
-      await supabase.from("orgs").update({ name: orgName || name + "'s Org" }).eq("id", profile.org_id);
+      const { error: orgUpdateError } = await supabase.from("orgs").update({ name: orgName || name + "'s Org" }).eq("id", profile.org_id);
+      console.log("[onboard] org update:", { orgId: profile.org_id, orgUpdateError });
     }
 
     router.push("/dashboard/upload");

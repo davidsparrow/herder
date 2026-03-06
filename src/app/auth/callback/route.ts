@@ -47,11 +47,16 @@ export async function GET(request: NextRequest) {
   }
 
   // Check if profile already exists (returning user)
-  const { data: existing } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from("profiles")
     .select("id")
     .eq("id", user.id)
     .single();
+
+  console.log("[auth/callback] existing profile check:", { userId: user.id, hasProfile: !!existing, existingError });
+  if (existingError) {
+    console.error("[auth/callback] Supabase profile check error (full):", JSON.stringify(existingError, null, 2));
+  }
 
   if (!existing) {
     // ── First-time sign-in: create org + profile using service role (bypasses RLS) ──
