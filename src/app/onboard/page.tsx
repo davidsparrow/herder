@@ -1,16 +1,18 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function OnboardPage() {
-  const router   = useRouter();
+  const router = useRouter();
   const supabase = createClient();
 
-  const [name,    setName]    = useState("");
+  const [name, setName] = useState("");
   const [orgName, setOrgName] = useState("");
-  const [saving,  setSaving]  = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
