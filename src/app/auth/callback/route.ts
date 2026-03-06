@@ -4,35 +4,47 @@ import { sendWelcomeEmail } from "@/lib/email";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/dashboard";
 
   // Build origin from host header to work correctly on Vercel
   const host = request.headers.get("host") ?? "";
   const proto = host.startsWith("localhost") ? "http" : "https";
   const origin = `${proto}://${host}`;
 
-  console.log("[auth/callback] code present:", !!code, "origin:", origin);
+  const code = searchParams.get("code");
+  const token_hash = searchParams.get("token_hash");
+  const type = searchParams.get("type") as "magiclink" | "email" | "recovery" | null;
+  const next = searchParams.get("next") ?? "/dashboard";
 
-  if (!code) {
-    console.error("[auth/callback] No code param in request URL:", request.url);
-    return NextResponse.redirect(`${origin}/auth/login?error=no_code`);
-  }
+  console.log("[auth/callback] params:", { code: !!code, token_hash: !!token_hash, type, origin });
 
   const supabase = createClient();
-  const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+  let user = null;
+  let exchangeError = null;
 
-  console.log("[auth/callback] exchange result:", { userId: data?.user?.id, error: error?.message });
+  if (token_hash && type) {
+    // ── Token hash flow (recommended for SSR — no localStorage needed) ──
+    const { data, error } = await supabase.auth.verifyOtp({ token_hash, type });
+    console.log("[auth/callback] verifyOtp result:", { userId: data?.user?.id, error: error?.message });
+    user = data?.user ?? null;
+    exchangeError = error;
+  } else if (code) {
+    // ── PKCE code flow (fallback) ──
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    console.log("[auth/callback] exchangeCode result:", { userId: data?.user?.id, error: error?.message });
+    user = data?.user ?? null;
+    exchangeError = error;
+  } else {
+    console.error("[auth/callback] No code or token_hash in URL:", request.url);
+    return NextResponse.redirect(`${origin}/auth/login?error=no_params`);
+  }
 
-  if (error || !data.user) {
-    const msg = error?.message ?? "unknown";
-    console.error("[auth/callback] Exchange failed:", msg);
+  if (exchangeError || !user) {
+    const msg = exchangeError?.message ?? "unknown";
+    console.error("[auth/callback] Auth failed:", msg);
     return NextResponse.redirect(
       `${origin}/auth/login?error=auth_error&detail=${encodeURIComponent(msg)}`
     );
   }
-
-  const user = data.user;
 
   // Check if profile already exists (returning user)
   const { data: existing } = await supabase
@@ -43,7 +55,6 @@ export async function GET(request: NextRequest) {
 
   if (!existing) {
     // ── First-time sign-in: create org + profile on Free plan ──────────
-
     const emailDomain = user.email?.split("@")[1] ?? "my-org";
     const { data: org } = await supabase
       .from("orgs")
