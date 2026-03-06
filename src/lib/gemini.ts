@@ -1,7 +1,37 @@
 import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from "@google/generative-ai";
 import type { GeminiExtractResult } from "@/lib/types";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const GEMINI_MULTIMODAL_MODEL = "gemini-2.5-flash";
+
+function getGenAI() {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("Missing GEMINI_API_KEY on the server.");
+  }
+
+  return new GoogleGenerativeAI(apiKey);
+}
+
+function parseGeminiJson(rawText: string): GeminiExtractResult {
+  const cleaned = rawText
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  try {
+    const parsed = JSON.parse(cleaned) as GeminiExtractResult;
+
+    if (!Array.isArray(parsed.names)) parsed.names = [];
+    if (!Array.isArray(parsed.detected_columns)) parsed.detected_columns = [];
+    if (!parsed.raw_text) parsed.raw_text = "";
+
+    return parsed;
+  } catch {
+    throw new Error(`Gemini returned non-JSON response: ${rawText.slice(0, 200)}`);
+  }
+}
 
 const EXTRACT_PROMPT = `
 You are a data extraction assistant for a class/event check-in app.
@@ -35,14 +65,17 @@ export async function extractListFromImage(
   base64Image: string,
   mimeType: "image/jpeg" | "image/png" | "image/webp" | "application/pdf"
 ): Promise<GeminiExtractResult> {
-  const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-pro",
+  const model = getGenAI().getGenerativeModel({
+    model: GEMINI_MULTIMODAL_MODEL,
     safetySettings: [
       { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
       { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,       threshold: HarmBlockThreshold.BLOCK_NONE },
       { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
       { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
     ],
+    generationConfig: {
+      responseMimeType: "application/json",
+    },
   });
 
   const result = await model.generateContent([
@@ -50,28 +83,19 @@ export async function extractListFromImage(
     { inlineData: { data: base64Image, mimeType } },
   ]);
 
-  const text = result.response.text().trim();
-
-  // Strip accidental markdown fences
-  const cleaned = text.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
-
-  try {
-    const parsed = JSON.parse(cleaned) as GeminiExtractResult;
-    // Ensure shape is complete
-    if (!Array.isArray(parsed.names)) parsed.names = [];
-    if (!Array.isArray(parsed.detected_columns)) parsed.detected_columns = [];
-    if (!parsed.raw_text) parsed.raw_text = "";
-    return parsed;
-  } catch (e) {
-    throw new Error(`Gemini returned non-JSON response: ${text.slice(0, 200)}`);
-  }
+  return parseGeminiJson(result.response.text().trim());
 }
 
 /**
  * For plain text/CSV input — no vision model needed, just parse structure.
  */
 export async function extractListFromText(text: string): Promise<GeminiExtractResult> {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const model = getGenAI().getGenerativeModel({
+    model: GEMINI_MULTIMODAL_MODEL,
+    generationConfig: {
+      responseMimeType: "application/json",
+    },
+  });
 
   const prompt = `
 Parse this plain text roster and return JSON in this exact shape with no markdown fences:
@@ -87,11 +111,9 @@ ${text}
   `.trim();
 
   const result = await model.generateContent(prompt);
-  const raw = result.response.text().trim()
-    .replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
 
   try {
-    return JSON.parse(raw) as GeminiExtractResult;
+    return parseGeminiJson(result.response.text().trim());
   } catch {
     // Fallback: treat each line as a name
     const names = text.split("\n").map(l => l.trim()).filter(Boolean);

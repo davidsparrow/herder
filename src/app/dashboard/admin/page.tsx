@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PLANS, type PlanTier } from "@/lib/plans";
+import { createClient } from "@/lib/supabase/client";
+import type { Org } from "@/lib/types";
 
 const TIERS: PlanTier[] = ["free", "standard", "pro"];
 
@@ -35,18 +37,131 @@ const NOTIF_RULES_INIT = [
 ];
 
 type AdminTab = "plan" | "columns" | "notifications" | "users";
+type OrgSettingsForm = {
+  name: string;
+  phone: string;
+  email: string;
+};
+
+const EMPTY_ORG_SETTINGS: OrgSettingsForm = {
+  name: "",
+  phone: "",
+  email: "",
+};
+
+function cleanOptionalValue(value: string) {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
 
 export default function AdminPage() {
+  const supabase = useMemo(() => createClient(), []);
   const [tab, setTab] = useState<AdminTab>("plan");
   const [overrides, setOverrides] = useState(DEFAULT_OVERRIDES);
   const [columns, setColumns] = useState(GLOBAL_COLUMNS_INIT);
   const [rules, setRules] = useState(NOTIF_RULES_INIT);
-  const [saved, setSaved] = useState(false);
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [orgSettings, setOrgSettings] = useState<OrgSettingsForm>(EMPTY_ORG_SETTINGS);
+  const [orgLoading, setOrgLoading] = useState(true);
+  const [orgSaving, setOrgSaving] = useState(false);
+  const [orgError, setOrgError] = useState<string | null>(null);
+  const [orgSaved, setOrgSaved] = useState(false);
 
-  const save = () => {
-    // In production: POST /api/admin/settings
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+  useEffect(() => {
+    let active = true;
+
+    const loadOrgSettings = async () => {
+      setOrgLoading(true);
+      setOrgError(null);
+
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (!active) return;
+
+      if (userError || !user) {
+        setOrgError(userError?.message ?? "Could not load your account.");
+        setOrgLoading(false);
+        return;
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("org_id")
+        .eq("id", user.id)
+        .single();
+
+      if (!active) return;
+
+      if (profileError || !profile?.org_id) {
+        setOrgError(profileError?.message ?? "Could not find your organization.");
+        setOrgLoading(false);
+        return;
+      }
+
+      const { data: org, error: loadOrgError } = await supabase
+        .from("orgs")
+        .select("id, name, phone, email")
+        .eq("id", profile.org_id)
+        .single() as { data: Pick<Org, "id" | "name" | "phone" | "email"> | null; error: any };
+
+      if (!active) return;
+
+      if (loadOrgError || !org) {
+        setOrgError(loadOrgError?.message ?? "Could not load organization settings.");
+        setOrgLoading(false);
+        return;
+      }
+
+      setOrgId(org.id);
+      setOrgSettings({
+        name: org.name ?? "",
+        phone: org.phone ?? "",
+        email: org.email ?? "",
+      });
+      setOrgLoading(false);
+    };
+
+    void loadOrgSettings();
+
+    return () => {
+      active = false;
+    };
+  }, [supabase]);
+
+  const saveOrgSettings = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (!orgId) {
+      setOrgError("Could not determine your organization.");
+      return;
+    }
+
+    const trimmedName = orgSettings.name.trim();
+    if (!trimmedName) {
+      setOrgError("Organization name is required.");
+      return;
+    }
+
+    setOrgSaving(true);
+    setOrgError(null);
+    setOrgSaved(false);
+
+    const phone = cleanOptionalValue(orgSettings.phone);
+    const email = cleanOptionalValue(orgSettings.email);
+
+    const { error } = await supabase
+      .from("orgs")
+      .update({ name: trimmedName, phone, email })
+      .eq("id", orgId);
+
+    if (error) {
+      setOrgError(error.message);
+      setOrgSaving(false);
+      return;
+    }
+
+    setOrgSettings({ name: trimmedName, phone: phone ?? "", email: email ?? "" });
+    setOrgSaved(true);
+    setOrgSaving(false);
   };
 
   const TABS: { id: AdminTab; label: string }[] = [
@@ -60,15 +175,9 @@ export default function AdminPage() {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
       <div className="bg-white border-b border-cream-border px-6 py-4">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="font-display font-black text-xl text-ink tracking-tight">Admin Settings</h1>
-            <p className="text-xs text-ink-light mt-0.5">Manage plan gates, columns, and notifications globally</p>
-          </div>
-          <button onClick={save}
-            className={`btn-primary px-5 py-2.5 text-sm transition-all ${saved ? "bg-sage shadow-sage" : ""}`}>
-            {saved ? "✓ Saved" : "Save changes"}
-          </button>
+        <div className="mb-4">
+          <h1 className="font-display font-black text-xl text-ink tracking-tight">Admin Settings</h1>
+          <p className="text-xs text-ink-light mt-0.5">Update organization contact details for notifications and review global admin controls.</p>
         </div>
         <div className="flex gap-1">
           {TABS.map(t => (
@@ -82,6 +191,88 @@ export default function AdminPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-4xl mb-6">
+          <form onSubmit={saveOrgSettings} className="card p-6 space-y-5">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="font-display font-black text-lg text-ink">Organization Settings</h2>
+                <p className="text-sm text-ink-light max-w-2xl mt-1">
+                  Save your organization name, phone, and email so admins and notification workflows have real contact details to use.
+                </p>
+              </div>
+              <button
+                type="submit"
+                disabled={orgLoading || orgSaving}
+                className={`btn-primary px-5 py-2.5 text-sm transition-all disabled:opacity-50 ${orgSaved ? "bg-sage shadow-sage" : ""}`}
+              >
+                {orgSaving ? "Saving…" : orgSaved ? "✓ Saved" : "Save organization"}
+              </button>
+            </div>
+
+            {orgError && (
+              <div className="rounded-2xl bg-blush-light px-4 py-3 text-sm text-blush">
+                {orgError}
+              </div>
+            )}
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <div>
+                <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">
+                  Organization Name
+                </label>
+                <input
+                  value={orgSettings.name}
+                  onChange={e => {
+                    setOrgSaved(false);
+                    setOrgSettings(current => ({ ...current, name: e.target.value }));
+                  }}
+                  placeholder="Lincoln Elementary"
+                  className="input-warm"
+                  disabled={orgLoading || orgSaving}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">
+                  Organization Phone
+                </label>
+                <input
+                  type="tel"
+                  value={orgSettings.phone}
+                  onChange={e => {
+                    setOrgSaved(false);
+                    setOrgSettings(current => ({ ...current, phone: e.target.value }));
+                  }}
+                  placeholder="(555) 123-4567"
+                  className="input-warm"
+                  disabled={orgLoading || orgSaving}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">
+                  Organization Email
+                </label>
+                <input
+                  type="email"
+                  value={orgSettings.email}
+                  onChange={e => {
+                    setOrgSaved(false);
+                    setOrgSettings(current => ({ ...current, email: e.target.value }));
+                  }}
+                  placeholder="frontdesk@school.edu"
+                  className="input-warm"
+                  disabled={orgLoading || orgSaving}
+                />
+              </div>
+            </div>
+
+            <p className="text-xs text-ink-light">
+              {orgLoading ? "Loading organization settings…" : "These values are stored on your organization record and can be used by notification workflows."}
+            </p>
+          </form>
+        </div>
 
         {/* ── Plan Limits tab ─────────────────────────────────────────────── */}
         {tab === "plan" && (

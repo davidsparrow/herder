@@ -15,6 +15,8 @@ export interface Profile {
 export interface Org {
   id: string;
   name: string;
+  phone: string | null;
+  email: string | null;
   plan_tier: PlanTier;
   plan_overrides: Record<string, unknown> | null;
   created_at: string;

@@ -20,6 +20,39 @@ interface ExtractResult {
   detected_columns: DetectedCol[];
 }
 
+interface UploadApiResponse {
+  data?: ExtractResult;
+  error?: string;
+  code?: string;
+  stage?: string;
+}
+
+async function readUploadResponse(res: Response): Promise<UploadApiResponse> {
+  const text = await res.text();
+
+  if (!text) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text) as UploadApiResponse;
+  } catch {
+    return { error: text };
+  }
+}
+
+function getUploadErrorMessage(payload: UploadApiResponse) {
+  if (payload.code === "PLAN_LIMIT" && payload.error) {
+    return `${payload.error} 👉 Upgrade your plan in Admin settings.`;
+  }
+
+  if (payload.error) {
+    return payload.error;
+  }
+
+  return "Upload failed.";
+}
+
 export default function UploadPage() {
   const router  = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -43,22 +76,30 @@ export default function UploadPage() {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch("/api/upload", { method: "POST", body: form });
-      const json = await res.json();
+      const json = await readUploadResponse(res);
       if (!res.ok) {
-        if (json.code === "PLAN_LIMIT") {
-          setError(json.error + " 👉 Upgrade your plan in Admin settings.");
-        } else {
-          setError(json.error ?? "Upload failed.");
-        }
+        console.error("[upload-ui] upload request failed:", {
+          status: res.status,
+          code: json.code ?? null,
+          stage: json.stage ?? null,
+          error: json.error ?? null,
+        });
+        setError(getUploadErrorMessage(json));
         setLoading(false);
         return;
       }
-      const data: ExtractResult = json.data;
+      const data = json.data;
+      if (!data) {
+        setError("Upload succeeded but returned no extracted data.");
+        setLoading(false);
+        return;
+      }
       setExtracted(data);
       setMappings(data.detected_columns.map(c => c.suggested_mapping));
       setStep(1);
     } catch (e) {
-      setError("Something went wrong. Please try again.");
+      console.error("[upload-ui] upload request crashed:", e);
+      setError(e instanceof Error ? e.message : "Something went wrong while uploading.");
     }
     setLoading(false);
   };
@@ -72,12 +113,30 @@ export default function UploadPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      const json = await res.json();
-      if (!res.ok) { setError(json.error); setLoading(false); return; }
+      const json = await readUploadResponse(res);
+      if (!res.ok) {
+        console.error("[upload-ui] text upload failed:", {
+          status: res.status,
+          code: json.code ?? null,
+          stage: json.stage ?? null,
+          error: json.error ?? null,
+        });
+        setError(getUploadErrorMessage(json));
+        setLoading(false);
+        return;
+      }
+      if (!json.data) {
+        setError("Upload succeeded but returned no extracted data.");
+        setLoading(false);
+        return;
+      }
       setExtracted(json.data);
       setMappings(json.data.detected_columns.map((c: DetectedCol) => c.suggested_mapping));
       setStep(1);
-    } catch { setError("Upload failed."); }
+    } catch (e) {
+      console.error("[upload-ui] text upload crashed:", e);
+      setError(e instanceof Error ? e.message : "Upload failed.");
+    }
     setLoading(false);
   };
 
