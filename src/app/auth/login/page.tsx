@@ -49,19 +49,34 @@ export default function LoginPage() {
   const signInWithPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    console.log("[login] attempting password sign in for:", email);
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    console.log("[login] signInWithPassword result:", { userId: data?.user?.id, error: error?.message });
     setLoading(false);
     if (error) { setError(error.message); return; }
+    console.log("[login] session established, redirecting to /dashboard");
     window.location.href = "/dashboard";
   };
 
   const signUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
-    const { error } = await supabase.auth.signUp({ email, password });
-    setLoading(false);
-    if (error) { setError(error.message); return; }
+    console.log("[login] attempting signup for:", email);
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password });
+    console.log("[login] signUp result:", { userId: signUpData?.user?.id, session: !!signUpData?.session, error: signUpError?.message });
+
+    if (signUpError) { setLoading(false); setError(signUpError.message); return; }
+
+    // If email confirmation is ON, signUp won't create a session — sign in immediately
+    if (!signUpData.session) {
+      console.log("[login] No session from signUp, attempting immediate signIn...");
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      console.log("[login] immediate signIn result:", { userId: signInData?.user?.id, session: !!signInData?.session, error: signInError?.message });
+      if (signInError) { setLoading(false); setError(signInError.message); return; }
+    }
+
     // Trigger in DB auto-creates org + profile on insert into auth.users
+    console.log("[login] signup+session done, redirecting to /onboard");
     window.location.href = "/onboard";
   };
 
