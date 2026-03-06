@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { extractListFromImage, extractListFromText } from "@/lib/gemini";
+import { extractListFromImage, extractListFromText, getGeminiErrorDiagnostics } from "@/lib/gemini";
 import { canCreateList } from "@/lib/plans";
 
 export const runtime = "nodejs";
@@ -54,25 +54,48 @@ function normalizeUploadMimeType(rawMimeType?: string | null, fileName?: string 
 }
 
 function serializeError(error: unknown) {
+  const geminiDiagnostics = getGeminiErrorDiagnostics(error);
+
   if (error instanceof Error) {
     return {
       name: error.name,
       message: error.message,
       stack: error.stack?.split("\n").slice(0, 5).join("\n") ?? null,
+      gemini: geminiDiagnostics,
     };
   }
 
   return {
     message: typeof error === "string" ? error : "Unknown upload error",
+    gemini: geminiDiagnostics,
   };
 }
 
 function getSafeUploadErrorMessage(error: unknown, stage: UploadStage | null) {
+  const geminiDiagnostics = getGeminiErrorDiagnostics(error);
   const fallback = stage === "extract-image"
     ? "Image extraction failed while reading the upload."
     : stage === "extract-text"
       ? "Text extraction failed while reading the upload."
       : "Upload failed while processing the request.";
+
+  if (geminiDiagnostics) {
+    switch (geminiDiagnostics.category) {
+      case "missing-env":
+        return "Upload is not configured yet: GEMINI_API_KEY is missing on the server.";
+      case "model-access":
+        return "Upload AI model is unavailable on the server. Check the configured Gemini model access and redeploy.";
+      case "quota-rate-limit":
+        return "The upload extraction service is temporarily rate-limited. Please wait a moment and try again.";
+      case "invalid-key":
+      case "permission-denied":
+        return "Upload is not configured correctly for the extraction service. Check the server Gemini API credentials and permissions.";
+      case "transport-service":
+        return `${fallback} The extraction service may be temporarily unavailable; please try again.`;
+      default:
+        break;
+    }
+  }
 
   if (!(error instanceof Error) || !error.message) {
     return fallback;
