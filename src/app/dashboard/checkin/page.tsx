@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import {
+  getSchemaDriftDiagnosticFromStrings,
+  getSchemaDriftUserMessage,
+  normalizeFlowId,
+} from "@/lib/flow-diagnostics";
 import { STUDENT_CUSTOM_FIELD_LABELS } from "@/lib/roster-persistence";
 import type {
   Attendance,
@@ -189,6 +194,15 @@ function formatNotificationSummary(summary: CheckinSubmitResponse["data"]["notif
   return parts.join(" · ");
 }
 
+function getSafeCheckinLoadErrorMessage(message: string) {
+  return getSchemaDriftUserMessage("Real check-in", getSchemaDriftDiagnosticFromStrings(message)) ?? message;
+}
+
+function getSafeTeacherLoadErrorMessage(message: string) {
+  return getSchemaDriftUserMessage("Teacher directory access", getSchemaDriftDiagnosticFromStrings(message))
+    ?? `Teacher directory lookup failed: ${message}`;
+}
+
 function getCustomFieldEntries(customData: Student["custom_data"], customColumns: CustomColumn[]) {
   const knownKeys = customColumns.map((column) => column.id);
   const orderedKeys = [...knownKeys, ...Object.keys(customData).filter((key) => !knownKeys.includes(key))];
@@ -232,6 +246,7 @@ export default function CheckInPage() {
   const searchParams = useSearchParams();
   const listId = searchParams.get("listId") ?? searchParams.get("list_id");
   const sessionId = searchParams.get("sessionId") ?? searchParams.get("session_id");
+  const flowId = normalizeFlowId(searchParams.get("flowId"));
   const supabase = useMemo(() => createClient(), []);
 
   const [list, setList] = useState<CheckinListSummary | null>(null);
@@ -291,6 +306,11 @@ export default function CheckInPage() {
       setLoading(true);
       setLoadError(null);
       setTeacherLoadError(null);
+      console.log("[checkin-ui] handoff load start:", {
+        flowId,
+        listId: shortId(listId) ?? listId,
+        sessionId: shortId(sessionId) ?? sessionId,
+      });
 
       try {
         const [listResult, sessionResult, studentsResult, attendanceResult, teachersResult] = await Promise.all([
@@ -325,18 +345,40 @@ export default function CheckInPage() {
         }
 
         if (listResult.error) {
+          console.error("[checkin-ui] list lookup failed:", {
+            flowId,
+            listId: shortId(listId) ?? listId,
+            schemaDrift: getSchemaDriftDiagnosticFromStrings(listResult.error.message),
+            error: listResult.error.message,
+          });
           throw new Error(`List lookup failed: ${listResult.error.message}`);
         }
 
         if (sessionResult.error) {
+          console.error("[checkin-ui] session lookup failed:", {
+            flowId,
+            sessionId: shortId(sessionId) ?? sessionId,
+            error: sessionResult.error.message,
+          });
           throw new Error(`Session lookup failed: ${sessionResult.error.message}`);
         }
 
         if (studentsResult.error) {
+          console.error("[checkin-ui] student lookup failed:", {
+            flowId,
+            listId: shortId(listId) ?? listId,
+            schemaDrift: getSchemaDriftDiagnosticFromStrings(studentsResult.error.message),
+            error: studentsResult.error.message,
+          });
           throw new Error(`Student roster lookup failed: ${studentsResult.error.message}`);
         }
 
         if (attendanceResult.error) {
+          console.error("[checkin-ui] attendance lookup failed:", {
+            flowId,
+            sessionId: shortId(sessionId) ?? sessionId,
+            error: attendanceResult.error.message,
+          });
           throw new Error(`Attendance lookup failed: ${attendanceResult.error.message}`);
         }
 
@@ -375,16 +417,32 @@ export default function CheckInPage() {
         setStudents(hydratedStudents);
         if (teachersResult.error) {
           setTeachers([]);
-          setTeacherLoadError(`Teacher directory lookup failed: ${teachersResult.error.message}`);
+          setTeacherLoadError(getSafeTeacherLoadErrorMessage(teachersResult.error.message));
         } else {
           setTeachers(nextTeachers);
         }
+        console.log("[checkin-ui] handoff load success:", {
+          flowId,
+          listId: nextList.id,
+          sessionId: nextSession.id,
+          studentCount: hydratedStudents.length,
+          teacherCount: nextTeachers.length,
+          teacherLookupFailed: Boolean(teachersResult.error),
+        });
       } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load the real check-in data.";
+        console.error("[checkin-ui] handoff load failed:", {
+          flowId,
+          listId: shortId(listId) ?? listId,
+          sessionId: shortId(sessionId) ?? sessionId,
+          schemaDrift: getSchemaDriftDiagnosticFromStrings(message),
+          error: message,
+        });
         setList(null);
         setSession(null);
         setStudents([]);
         setTeachers([]);
-        setLoadError(error instanceof Error ? error.message : "Failed to load the real check-in data.");
+        setLoadError(getSafeCheckinLoadErrorMessage(message));
       } finally {
         if (active) {
           setLoading(false);

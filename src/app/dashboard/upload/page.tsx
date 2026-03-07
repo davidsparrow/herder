@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { appendFlowIdToPath, FLOW_ID_HEADER, normalizeFlowId } from "@/lib/flow-diagnostics";
 import {
   UPLOAD_FIELD_MAPPINGS,
   type CheckinList,
@@ -22,6 +23,7 @@ interface UploadApiResponse {
   error?: string;
   code?: string;
   stage?: string;
+  flow_id?: string;
 }
 
 interface CreateListApiResponse {
@@ -35,6 +37,15 @@ interface CreateListApiResponse {
   };
   error?: string;
   code?: string;
+  stage?: string;
+  flow_id?: string;
+  diagnostic_hint?: string | null;
+}
+
+function createFlowId() {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `upload-${Date.now()}`;
 }
 
 type ExistingListOption = Pick<CheckinList, "id" | "name" | "created_at">;
@@ -224,6 +235,7 @@ export default function UploadPage() {
   const [mergedStudentCount, setMergedStudentCount] = useState(0);
   const [createdCheckinPath, setCreatedCheckinPath] = useState<string | null>(null);
   const [createdNewList, setCreatedNewList] = useState(true);
+  const [flowId, setFlowId] = useState<string | null>(null);
   const [existingLists, setExistingLists] = useState<ExistingListOption[]>([]);
   const [existingListId, setExistingListId] = useState("");
   const [loadingLists, setLoadingLists] = useState(false);
@@ -528,15 +540,33 @@ export default function UploadPage() {
 
   // ── Upload handler ──────────────────────────────────────────────────────────
   const handleFile = async (file: File) => {
+    const nextFlowId = createFlowId();
+    setFlowId(nextFlowId);
     setLoading(true);
     setError(null);
+    console.log("[upload-ui] upload start:", {
+      flowId: nextFlowId,
+      mode: "file",
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type || null,
+    });
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: form,
+        headers: {
+          [FLOW_ID_HEADER]: nextFlowId,
+        },
+      });
       const json = await readApiResponse<UploadApiResponse>(res);
+      const resolvedFlowId = normalizeFlowId(json.flow_id) ?? nextFlowId;
+      setFlowId(resolvedFlowId);
       if (!res.ok) {
         console.error("[upload-ui] upload request failed:", {
+          flowId: resolvedFlowId,
           status: res.status,
           code: json.code ?? null,
           stage: json.stage ?? null,
@@ -552,26 +582,45 @@ export default function UploadPage() {
         setLoading(false);
         return;
       }
+      console.log("[upload-ui] upload success:", {
+        flowId: resolvedFlowId,
+        namesCount: data.names.length,
+        primaryRowsCount: data.primary_block?.rows?.length ?? 0,
+        detectedColumnsCount: data.detected_columns.length,
+      });
       applyExtractionResult(data);
     } catch (e) {
-      console.error("[upload-ui] upload request crashed:", e);
+      console.error("[upload-ui] upload request crashed:", { flowId: nextFlowId, error: e });
       setError(e instanceof Error ? e.message : "Something went wrong while uploading.");
     }
     setLoading(false);
   };
 
   const handleTextPaste = async (text: string) => {
+    const nextFlowId = createFlowId();
+    setFlowId(nextFlowId);
     setLoading(true);
     setError(null);
+    console.log("[upload-ui] upload start:", {
+      flowId: nextFlowId,
+      mode: "text",
+      textLength: text.length,
+    });
     try {
       const res = await fetch("/api/upload", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          [FLOW_ID_HEADER]: nextFlowId,
+        },
         body: JSON.stringify({ text }),
       });
       const json = await readApiResponse<UploadApiResponse>(res);
+      const resolvedFlowId = normalizeFlowId(json.flow_id) ?? nextFlowId;
+      setFlowId(resolvedFlowId);
       if (!res.ok) {
         console.error("[upload-ui] text upload failed:", {
+          flowId: resolvedFlowId,
           status: res.status,
           code: json.code ?? null,
           stage: json.stage ?? null,
@@ -586,9 +635,15 @@ export default function UploadPage() {
         setLoading(false);
         return;
       }
+      console.log("[upload-ui] upload success:", {
+        flowId: resolvedFlowId,
+        namesCount: json.data.names.length,
+        primaryRowsCount: json.data.primary_block?.rows?.length ?? 0,
+        detectedColumnsCount: json.data.detected_columns.length,
+      });
       applyExtractionResult(json.data);
     } catch (e) {
-      console.error("[upload-ui] text upload crashed:", e);
+      console.error("[upload-ui] text upload crashed:", { flowId: nextFlowId, error: e });
       setError(e instanceof Error ? e.message : "Upload failed.");
     }
     setLoading(false);
@@ -607,11 +662,28 @@ export default function UploadPage() {
 
     setCreating(true);
     setError(null);
+    const activeFlowId = flowId ?? createFlowId();
+    if (!flowId) {
+      setFlowId(activeFlowId);
+    }
+    console.log("[upload-ui] create-list start:", {
+      flowId: activeFlowId,
+      mode: appendToExisting ? "append" : "create",
+      existingListId: appendToExisting ? existingListId : null,
+      namesCount: extracted.names.length,
+      primaryRowsCount: extracted.primary_block?.rows?.length ?? 0,
+      detectedColumnsCount: extracted.detected_columns.length,
+      recurringDaysSelected: days.filter(Boolean).length,
+      recurringTime: time,
+    });
 
     try {
       const res = await fetch("/api/lists", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          [FLOW_ID_HEADER]: activeFlowId,
+        },
         body: JSON.stringify({
           className,
           recurringDays: days,
@@ -632,20 +704,38 @@ export default function UploadPage() {
       });
 
       const json = await readApiResponse<CreateListApiResponse>(res);
+      const resolvedFlowId = normalizeFlowId(json.flow_id) ?? activeFlowId;
+      setFlowId(resolvedFlowId);
       if (!res.ok || !json.data?.list_id || !json.data.session_id || !json.data.checkin_path) {
+        console.error("[upload-ui] create-list failed:", {
+          flowId: resolvedFlowId,
+          status: res.status,
+          stage: json.stage ?? null,
+          code: json.code ?? null,
+          diagnosticHint: json.diagnostic_hint ?? null,
+          error: json.error ?? null,
+        });
         setError(getCreateListErrorMessage(json));
         return;
       }
+
+      const nextCheckinPath = appendFlowIdToPath(json.data.checkin_path, resolvedFlowId);
+      console.log("[upload-ui] create-list success:", {
+        flowId: resolvedFlowId,
+        listId: json.data.list_id,
+        sessionId: json.data.session_id,
+        checkinPath: nextCheckinPath,
+      });
 
       setCreatedListId(json.data.list_id);
       setCreatedSessionId(json.data.session_id);
       setCreatedStudentCount(json.data.student_count);
       setMergedStudentCount(json.data.merged_student_count ?? 0);
-      setCreatedCheckinPath(json.data.checkin_path);
+      setCreatedCheckinPath(nextCheckinPath);
       setCreatedNewList(json.data.created_new_list ?? !appendToExisting);
       setStep(3);
     } catch (e) {
-      console.error("[upload-ui] list creation crashed:", e);
+      console.error("[upload-ui] list creation crashed:", { flowId: activeFlowId, error: e });
       setError(e instanceof Error ? e.message : "Failed to create the check-in list.");
     } finally {
       setCreating(false);
@@ -1164,7 +1254,13 @@ export default function UploadPage() {
             ))}
           </div>
 
-          <button onClick={() => router.push(createdCheckinPath ?? "/dashboard/checkin")}
+          <button onClick={() => {
+            console.log("[upload-ui] navigate to check-in:", {
+              flowId,
+              checkinPath: createdCheckinPath ?? "/dashboard/checkin",
+            });
+            router.push(createdCheckinPath ?? "/dashboard/checkin");
+          }}
             className="btn-primary px-10 py-4 text-base">
             Open Check-in Screen →
           </button>

@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import {
+  FLOW_ID_HEADER,
+  getSchemaDriftDiagnosticFromStrings,
+  getSchemaDriftUserMessage,
+  normalizeFlowId,
+} from "@/lib/flow-diagnostics";
 import { canCreateList } from "@/lib/plans";
 import {
   buildCustomColumnsFromKeys,
@@ -36,6 +43,55 @@ type CreateListRequestBody = {
 };
 
 type ExistingStudentRow = Pick<Student, "id" | "uid" | "name" | "first_name" | "last_name" | "custom_data">;
+
+type ListStage =
+  | "profile-lookup"
+  | "count-lists"
+  | "insert-list"
+  | "insert-students"
+  | "update-students"
+  | "append-students"
+  | "update-list-metadata"
+  | "upsert-session"
+  | "lookup-existing-list"
+  | "lookup-existing-students"
+  | "rollback-created-list";
+
+function serializeListError(error: unknown) {
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  const message = typeof record.message === "string" ? record.message : error instanceof Error ? error.message : null;
+  const details = typeof record.details === "string" ? record.details : null;
+  const hint = typeof record.hint === "string" ? record.hint : null;
+  const code = typeof record.code === "string" ? record.code : null;
+  const schemaDrift = getSchemaDriftDiagnosticFromStrings(message, details, hint);
+
+  return {
+    code,
+    message,
+    details,
+    hint,
+    schemaDrift,
+  };
+}
+
+function getSafeListFailureMessage(
+  serializedError: ReturnType<typeof serializeListError>,
+  fallback: string,
+  partialPersistenceHint?: string | null,
+) {
+  const schemaDriftMessage = getSchemaDriftUserMessage("List persistence", serializedError.schemaDrift);
+  const baseMessage = schemaDriftMessage ?? serializedError.message ?? fallback;
+
+  if (partialPersistenceHint) {
+    return `${baseMessage} ${partialPersistenceHint}`;
+  }
+
+  return baseMessage;
+}
+
+function getListFailureCode(partialPersistenceHint?: string | null) {
+  return partialPersistenceHint ? "LIST_PERSISTENCE_PARTIAL" : "LIST_PERSISTENCE_FAILED";
+}
 
 function isUploadFieldMapping(value: unknown): value is UploadFieldMapping {
   return typeof value === "string" && UPLOAD_FIELD_MAPPINGS.includes(value as UploadFieldMapping);
@@ -252,16 +308,31 @@ async function validateTeacherIds(
   substituteTeacherId: string | null
 ) {
   if (substituteTeacherId && !originalTeacherId) {
-    return { error: "Select an original teacher before assigning a substitute." };
+    return {
+      error: "Select an original teacher before assigning a substitute.",
+      code: null,
+      diagnosticHint: null,
+      status: 400,
+    };
   }
 
   if (originalTeacherId && substituteTeacherId && originalTeacherId === substituteTeacherId) {
-    return { error: "Original teacher and substitute teacher must be different people." };
+    return {
+      error: "Original teacher and substitute teacher must be different people.",
+      code: null,
+      diagnosticHint: null,
+      status: 400,
+    };
   }
 
   const teacherIds = [originalTeacherId, substituteTeacherId].filter((value): value is string => Boolean(value));
   if (teacherIds.length === 0) {
-    return { error: null };
+    return {
+      error: null,
+      code: null,
+      diagnosticHint: null,
+      status: 400,
+    };
   }
 
   const { data, error } = await supabase
@@ -271,7 +342,13 @@ async function validateTeacherIds(
     .in("id", teacherIds);
 
   if (error) {
-    return { error: error.message };
+    const serializedError = serializeListError(error);
+    return {
+      error: getSafeListFailureMessage(serializedError, "Failed to validate the selected teachers before saving the real list."),
+      code: getListFailureCode(),
+      diagnosticHint: serializedError.schemaDrift.reason,
+      status: 500,
+    };
   }
 
   const validIds = new Set((data ?? []).map((teacher) => String(teacher.id)));
@@ -279,18 +356,34 @@ async function validateTeacherIds(
     error: teacherIds.some((teacherId) => !validIds.has(teacherId))
       ? "Choose teachers from your organization directory only."
       : null,
+    code: null,
+    diagnosticHint: null,
+    status: 400,
   };
 }
 
 export async function POST(req: NextRequest) {
   const supabase = createClient();
   const admin = createServiceClient();
+  const flowId = normalizeFlowId(req.headers.get(FLOW_ID_HEADER)) ?? randomUUID();
+  const vercelRequestId = req.headers.get("x-vercel-id") ?? null;
+  const appendPartialPersistenceHint = "Some roster changes may already be saved to the selected list. Review the live list before retrying so you do not duplicate or overwrite data.";
 
   const rollbackCreatedList = async (listId: string) => {
     const { error: rollbackError } = await admin.from("checkin_lists").delete().eq("id", listId);
     if (rollbackError) {
-      console.error("[lists/create] rollback failed:", rollbackError);
+      const serializedError = serializeListError(rollbackError);
+      console.error("[lists] request failed:", {
+        flowId,
+        vercelRequestId,
+        stage: "rollback-created-list" satisfies ListStage,
+        listId,
+        error: serializedError,
+      });
+      return serializedError;
     }
+
+    return null;
   };
 
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -305,8 +398,24 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (profileError) {
-    console.error("[lists/create] profile lookup failed:", profileError);
-    return NextResponse.json({ error: profileError.message }, { status: 500 });
+    const serializedError = serializeListError(profileError);
+    console.error("[lists] request failed:", {
+      flowId,
+      vercelRequestId,
+      userId: user.id,
+      stage: "profile-lookup" satisfies ListStage,
+      error: serializedError,
+    });
+    return NextResponse.json(
+      {
+        error: getSafeListFailureMessage(serializedError, "Failed to load the user profile for list persistence."),
+        code: "LIST_PERSISTENCE_FAILED",
+        stage: "profile-lookup",
+        flow_id: flowId,
+        diagnostic_hint: serializedError.schemaDrift.reason,
+      },
+      { status: 500 }
+    );
   }
 
   if (!profile) {
@@ -323,6 +432,7 @@ export async function POST(req: NextRequest) {
   const extracted = normalizeExtracted(body.extracted);
   const requestedSourceMetadata = normalizeSourceMetadata(body.sourceMetadata);
   const rawMappings = Array.isArray(body.mappings) ? body.mappings : [];
+  const mode = existingListId ? "append" : "create";
 
   if (!extracted) {
     return NextResponse.json({ error: "Extracted roster data is missing." }, { status: 400 });
@@ -347,10 +457,36 @@ export async function POST(req: NextRequest) {
     default_pickup_drop_location: extractedSourceMetadata.default_pickup_drop_location,
   };
 
+  console.log("[lists] request start:", {
+    flowId,
+    vercelRequestId,
+    userId: user.id,
+    orgId: profile.org_id,
+    mode,
+    classNameProvided: Boolean(className),
+    existingListId: existingListId || null,
+    namesCount: extracted.names.length,
+    primaryRowsCount: extracted.primary_block?.rows?.length ?? 0,
+    detectedColumnsCount: detectedColumns.length,
+    recurringDaysSelected: recurringDays?.filter(Boolean).length ?? null,
+    recurringTime,
+    customColumnCount: incomingCustomColumnKeys.size,
+    originalTeacherSelected: Boolean(originalTeacherId),
+    substituteTeacherSelected: Boolean(substituteTeacherId),
+  });
+
   if (!existingListId) {
     const teacherValidation = await validateTeacherIds(supabase, profile.org_id, originalTeacherId, substituteTeacherId);
     if (teacherValidation.error) {
-      return NextResponse.json({ error: teacherValidation.error }, { status: 400 });
+      return NextResponse.json(
+        {
+          error: teacherValidation.error,
+          code: teacherValidation.code,
+          flow_id: flowId,
+          diagnostic_hint: teacherValidation.diagnosticHint,
+        },
+        { status: teacherValidation.status },
+      );
     }
 
     if (!className) {
@@ -368,8 +504,25 @@ export async function POST(req: NextRequest) {
       .eq("archived", false);
 
     if (countError) {
-      console.error("[lists/create] list count failed:", countError);
-      return NextResponse.json({ error: countError.message }, { status: 500 });
+      const serializedError = serializeListError(countError);
+      console.error("[lists] request failed:", {
+        flowId,
+        vercelRequestId,
+        orgId: profile.org_id,
+        mode,
+        stage: "count-lists" satisfies ListStage,
+        error: serializedError,
+      });
+      return NextResponse.json(
+        {
+          error: getSafeListFailureMessage(serializedError, "Failed to count existing lists before creating a new one."),
+          code: "LIST_PERSISTENCE_FAILED",
+          stage: "count-lists",
+          flow_id: flowId,
+          diagnostic_hint: serializedError.schemaDrift.reason,
+        },
+        { status: 500 }
+      );
     }
 
     const gate = canCreateList(profile.plan_tier, count ?? 0);
@@ -378,6 +531,13 @@ export async function POST(req: NextRequest) {
     }
 
     const mergeResult = mergeIncomingStudents([], incomingStudents);
+    console.log("[lists/create] merge summary:", {
+      flowId,
+      incomingStudentsCount: incomingStudents.length,
+      newStudentsCount: mergeResult.newStudents.length,
+      mergedCount: mergeResult.mergedCount,
+      conflictCount: mergeResult.conflictNames.length,
+    });
     if (mergeResult.conflictNames.length) {
       return NextResponse.json(
         { error: `Duplicate student rows conflicted and could not be merged honestly: ${mergeResult.conflictNames.join(", ")}.` },
@@ -402,9 +562,28 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (listError || !createdList) {
-      console.error("[lists/create] list insert failed:", listError);
-      return NextResponse.json({ error: listError?.message ?? "Failed to create check-in list." }, { status: 500 });
+      const serializedError = serializeListError(listError);
+      console.error("[lists] request failed:", {
+        flowId,
+        vercelRequestId,
+        orgId: profile.org_id,
+        mode,
+        stage: "insert-list" satisfies ListStage,
+        error: serializedError,
+      });
+      return NextResponse.json(
+        {
+          error: getSafeListFailureMessage(serializedError, "Failed to create the real check-in list."),
+          code: "LIST_PERSISTENCE_FAILED",
+          stage: "insert-list",
+          flow_id: flowId,
+          diagnostic_hint: serializedError.schemaDrift.reason,
+        },
+        { status: 500 }
+      );
     }
+
+    console.log("[lists/create] list inserted:", { flowId, listId: createdList.id });
 
     const usedUids: string[] = [];
     const studentsToInsert = mergeResult.newStudents.map((student) => {
@@ -419,20 +598,70 @@ export async function POST(req: NextRequest) {
       .select("id");
 
     if (studentsError) {
-      console.error("[lists/create] student insert failed:", studentsError);
-      await rollbackCreatedList(createdList.id);
-      return NextResponse.json({ error: studentsError.message }, { status: 500 });
+      const serializedError = serializeListError(studentsError);
+      console.error("[lists] request failed:", {
+        flowId,
+        vercelRequestId,
+        listId: createdList.id,
+        mode,
+        stage: "insert-students" satisfies ListStage,
+        studentsAttempted: studentsToInsert.length,
+        error: serializedError,
+      });
+      const rollbackError = await rollbackCreatedList(createdList.id);
+      const partialPersistenceHint = rollbackError
+        ? "Rollback did not complete cleanly, so some list data may already exist in the database. Review the live data before retrying."
+        : null;
+      return NextResponse.json(
+        {
+          error: getSafeListFailureMessage(serializedError, "Failed to save the extracted student roster.", partialPersistenceHint),
+          code: getListFailureCode(partialPersistenceHint),
+          stage: "insert-students",
+          flow_id: flowId,
+          diagnostic_hint: serializedError.schemaDrift.reason,
+        },
+        { status: 500 }
+      );
     }
+
+    console.log("[lists/create] students inserted:", {
+      flowId,
+      listId: createdList.id,
+      createdStudentCount: createdStudents?.length ?? 0,
+    });
 
     const { data: createdSession, error: sessionError } = await upsertTodaySession(supabase, createdList.id);
     if (sessionError || !createdSession) {
-      console.error("[lists/create] session upsert failed:", sessionError);
-      await rollbackCreatedList(createdList.id);
-      return NextResponse.json({ error: "Failed to create the real check-in session." }, { status: 500 });
+      const serializedError = serializeListError(sessionError);
+      console.error("[lists] request failed:", {
+        flowId,
+        vercelRequestId,
+        listId: createdList.id,
+        mode,
+        stage: "upsert-session" satisfies ListStage,
+        error: serializedError,
+      });
+      const rollbackError = await rollbackCreatedList(createdList.id);
+      const partialPersistenceHint = rollbackError
+        ? "Rollback did not complete cleanly, so some list data may already exist in the database. Review the live data before retrying."
+        : null;
+      return NextResponse.json(
+        {
+          error: getSafeListFailureMessage(serializedError, "Failed to create the real check-in session.", partialPersistenceHint),
+          code: getListFailureCode(partialPersistenceHint),
+          stage: "upsert-session",
+          flow_id: flowId,
+          diagnostic_hint: serializedError.schemaDrift.reason,
+        },
+        { status: 500 }
+      );
     }
+
+    console.log("[lists/create] session ready:", { flowId, listId: createdList.id, sessionId: createdSession.id });
 
     return NextResponse.json({
       success: true,
+      flow_id: flowId,
       data: {
         list_id: createdList.id,
         session_id: createdSession.id,
@@ -453,8 +682,26 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (existingListError) {
-    console.error("[lists/append] existing list lookup failed:", existingListError);
-    return NextResponse.json({ error: existingListError.message }, { status: 500 });
+    const serializedError = serializeListError(existingListError);
+    console.error("[lists] request failed:", {
+      flowId,
+      vercelRequestId,
+      orgId: profile.org_id,
+      mode,
+      stage: "lookup-existing-list" satisfies ListStage,
+      existingListId,
+      error: serializedError,
+    });
+    return NextResponse.json(
+      {
+        error: getSafeListFailureMessage(serializedError, "Failed to load the selected existing list."),
+        code: "LIST_PERSISTENCE_FAILED",
+        stage: "lookup-existing-list",
+        flow_id: flowId,
+        diagnostic_hint: serializedError.schemaDrift.reason,
+      },
+      { status: 500 }
+    );
   }
 
   if (!existingList) {
@@ -468,11 +715,36 @@ export async function POST(req: NextRequest) {
     .order("uid");
 
   if (existingStudentsError) {
-    console.error("[lists/append] existing students lookup failed:", existingStudentsError);
-    return NextResponse.json({ error: existingStudentsError.message }, { status: 500 });
+    const serializedError = serializeListError(existingStudentsError);
+    console.error("[lists] request failed:", {
+      flowId,
+      vercelRequestId,
+      listId: existingList.id,
+      mode,
+      stage: "lookup-existing-students" satisfies ListStage,
+      error: serializedError,
+    });
+    return NextResponse.json(
+      {
+        error: getSafeListFailureMessage(serializedError, "Failed to load existing students before append."),
+        code: "LIST_PERSISTENCE_FAILED",
+        stage: "lookup-existing-students",
+        flow_id: flowId,
+        diagnostic_hint: serializedError.schemaDrift.reason,
+      },
+      { status: 500 }
+    );
   }
 
   const mergeResult = mergeIncomingStudents((existingStudents ?? []) as ExistingStudentRow[], incomingStudents);
+  console.log("[lists/append] merge summary:", {
+    flowId,
+    listId: existingList.id,
+    incomingStudentsCount: incomingStudents.length,
+    newStudentsCount: mergeResult.newStudents.length,
+    mergedCount: mergeResult.mergedCount,
+    conflictCount: mergeResult.conflictNames.length,
+  });
   if (mergeResult.conflictNames.length) {
     return NextResponse.json(
       { error: `Duplicate student rows conflicted and could not be merged honestly: ${mergeResult.conflictNames.join(", ")}.` },
@@ -483,6 +755,30 @@ export async function POST(req: NextRequest) {
   const existingCustomColumns = normalizeCustomColumns(existingList.custom_columns);
   const nextCustomColumns = mergeCustomColumns(existingCustomColumns, incomingCustomColumnKeys);
   const nextSourceMetadata = mergeSourceMetadata(existingList.source_metadata, sourceMetadata);
+  const appendMutationStarted = mergeResult.updatedStudents.length > 0 || mergeResult.newStudents.length > 0;
+
+  const { data: createdSession, error: sessionError } = await upsertTodaySession(supabase, existingList.id);
+  if (sessionError || !createdSession) {
+    const serializedError = serializeListError(sessionError);
+    console.error("[lists] request failed:", {
+      flowId,
+      vercelRequestId,
+      listId: existingList.id,
+      mode,
+      stage: "upsert-session" satisfies ListStage,
+      error: serializedError,
+    });
+    return NextResponse.json(
+      {
+        error: getSafeListFailureMessage(serializedError, "Failed to create the real check-in session."),
+        code: getListFailureCode(),
+        stage: "upsert-session",
+        flow_id: flowId,
+        diagnostic_hint: serializedError.schemaDrift.reason,
+      },
+      { status: 500 }
+    );
+  }
 
   if (mergeResult.updatedStudents.length) {
     const updateResults = await Promise.all(
@@ -502,9 +798,37 @@ export async function POST(req: NextRequest) {
 
     const failedUpdate = updateResults.find((result) => result.error);
     if (failedUpdate?.error) {
-      console.error("[lists/append] student merge update failed:", failedUpdate.error);
-      return NextResponse.json({ error: failedUpdate.error.message }, { status: 500 });
+      const serializedError = serializeListError(failedUpdate.error);
+      console.error("[lists] request failed:", {
+        flowId,
+        vercelRequestId,
+        listId: existingList.id,
+        mode,
+        stage: "update-students" satisfies ListStage,
+        studentsAttempted: mergeResult.updatedStudents.length,
+        error: serializedError,
+      });
+      return NextResponse.json(
+        {
+          error: getSafeListFailureMessage(
+            serializedError,
+            "Failed to merge duplicate student rows into the existing list.",
+            appendPartialPersistenceHint,
+          ),
+          code: getListFailureCode(appendPartialPersistenceHint),
+          stage: "update-students",
+          flow_id: flowId,
+          diagnostic_hint: serializedError.schemaDrift.reason,
+        },
+        { status: 500 }
+      );
     }
+
+    console.log("[lists/append] students updated:", {
+      flowId,
+      listId: existingList.id,
+      updatedStudentCount: mergeResult.updatedStudents.length,
+    });
   }
 
   if (mergeResult.newStudents.length) {
@@ -517,9 +841,34 @@ export async function POST(req: NextRequest) {
 
     const { error: appendStudentsError } = await supabase.from("students").insert(studentsToInsert);
     if (appendStudentsError) {
-      console.error("[lists/append] student append failed:", appendStudentsError);
-      return NextResponse.json({ error: appendStudentsError.message }, { status: 500 });
+      const serializedError = serializeListError(appendStudentsError);
+      const partialPersistenceHint = mergeResult.updatedStudents.length ? appendPartialPersistenceHint : null;
+      console.error("[lists] request failed:", {
+        flowId,
+        vercelRequestId,
+        listId: existingList.id,
+        mode,
+        stage: "append-students" satisfies ListStage,
+        studentsAttempted: studentsToInsert.length,
+        error: serializedError,
+      });
+      return NextResponse.json(
+        {
+          error: getSafeListFailureMessage(serializedError, "Failed to append new students into the existing list.", partialPersistenceHint),
+          code: getListFailureCode(partialPersistenceHint),
+          stage: "append-students",
+          flow_id: flowId,
+          diagnostic_hint: serializedError.schemaDrift.reason,
+        },
+        { status: 500 }
+      );
     }
+
+    console.log("[lists/append] students inserted:", {
+      flowId,
+      listId: existingList.id,
+      createdStudentCount: mergeResult.newStudents.length,
+    });
   }
 
   const { error: updateListError } = await supabase
@@ -529,18 +878,35 @@ export async function POST(req: NextRequest) {
     .eq("org_id", profile.org_id);
 
   if (updateListError) {
-    console.error("[lists/append] list metadata update failed:", updateListError);
-    return NextResponse.json({ error: updateListError.message }, { status: 500 });
+    const serializedError = serializeListError(updateListError);
+    const partialPersistenceHint = appendMutationStarted ? appendPartialPersistenceHint : null;
+    console.error("[lists] request failed:", {
+      flowId,
+      vercelRequestId,
+      listId: existingList.id,
+      mode,
+      stage: "update-list-metadata" satisfies ListStage,
+      error: serializedError,
+    });
+    return NextResponse.json(
+      {
+        error: getSafeListFailureMessage(serializedError, "Failed to update list metadata after append.", partialPersistenceHint),
+        code: getListFailureCode(partialPersistenceHint),
+        stage: "update-list-metadata",
+        flow_id: flowId,
+        diagnostic_hint: serializedError.schemaDrift.reason,
+      },
+      { status: 500 }
+    );
   }
 
-  const { data: createdSession, error: sessionError } = await upsertTodaySession(supabase, existingList.id);
-  if (sessionError || !createdSession) {
-    console.error("[lists/append] session upsert failed:", sessionError);
-    return NextResponse.json({ error: "Failed to create the real check-in session." }, { status: 500 });
-  }
+  console.log("[lists/append] list metadata updated:", { flowId, listId: existingList.id });
+
+  console.log("[lists/append] session ready:", { flowId, listId: existingList.id, sessionId: createdSession.id });
 
   return NextResponse.json({
     success: true,
+    flow_id: flowId,
     data: {
       list_id: existingList.id,
       session_id: createdSession.id,
