@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { PLANS, type PlanTier } from "@/lib/plans";
 import { createClient } from "@/lib/supabase/client";
-import type { Org } from "@/lib/types";
+import type { Org, Teacher } from "@/lib/types";
 
 const TIERS: PlanTier[] = ["free", "standard", "pro"];
 
@@ -36,12 +36,20 @@ const NOTIF_RULES_INIT = [
   { event: "Emergency alert", recipients: "All", channel: "SMS+Email", active: true },
 ];
 
-type AdminTab = "plan" | "columns" | "notifications" | "users";
+type AdminTab = "plan" | "columns" | "notifications" | "teachers" | "users";
 type OrgSettingsForm = {
   name: string;
   phone: string;
   email: string;
 };
+
+type TeacherForm = {
+  name: string;
+  email: string;
+  phone: string;
+};
+
+type TeacherDirectoryRow = Pick<Teacher, "id" | "name" | "email" | "phone">;
 
 const EMPTY_ORG_SETTINGS: OrgSettingsForm = {
   name: "",
@@ -49,9 +57,19 @@ const EMPTY_ORG_SETTINGS: OrgSettingsForm = {
   email: "",
 };
 
+const EMPTY_TEACHER_FORM: TeacherForm = {
+  name: "",
+  email: "",
+  phone: "",
+};
+
 function cleanOptionalValue(value: string) {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function sortTeachers(rows: TeacherDirectoryRow[]) {
+  return [...rows].sort((left, right) => left.name.localeCompare(right.name) || (left.email ?? "").localeCompare(right.email ?? ""));
 }
 
 export default function AdminPage() {
@@ -66,13 +84,22 @@ export default function AdminPage() {
   const [orgSaving, setOrgSaving] = useState(false);
   const [orgError, setOrgError] = useState<string | null>(null);
   const [orgSaved, setOrgSaved] = useState(false);
+  const [teachers, setTeachers] = useState<TeacherDirectoryRow[]>([]);
+  const [teacherForm, setTeacherForm] = useState<TeacherForm>(EMPTY_TEACHER_FORM);
+  const [teacherLoading, setTeacherLoading] = useState(true);
+  const [teacherSaving, setTeacherSaving] = useState(false);
+  const [teacherError, setTeacherError] = useState<string | null>(null);
+  const [teacherSaved, setTeacherSaved] = useState(false);
+  const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
 
     const loadOrgSettings = async () => {
       setOrgLoading(true);
+      setTeacherLoading(true);
       setOrgError(null);
+      setTeacherError(null);
 
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (!active) return;
@@ -97,17 +124,27 @@ export default function AdminPage() {
         return;
       }
 
-      const { data: org, error: loadOrgError } = await supabase
-        .from("orgs")
-        .select("id, name, phone, email")
-        .eq("id", profile.org_id)
-        .single() as { data: Pick<Org, "id" | "name" | "phone" | "email"> | null; error: any };
+      const [{ data: org, error: loadOrgError }, { data: teacherRows, error: loadTeacherError }] = await Promise.all([
+        supabase
+          .from("orgs")
+          .select("id, name, phone, email")
+          .eq("id", profile.org_id)
+          .single(),
+        supabase
+          .from("teachers")
+          .select("id, name, email, phone")
+          .order("name", { ascending: true }),
+      ]) as [
+        { data: Pick<Org, "id" | "name" | "phone" | "email"> | null; error: any },
+        { data: TeacherDirectoryRow[] | null; error: any },
+      ];
 
       if (!active) return;
 
       if (loadOrgError || !org) {
         setOrgError(loadOrgError?.message ?? "Could not load organization settings.");
         setOrgLoading(false);
+        setTeacherLoading(false);
         return;
       }
 
@@ -117,7 +154,16 @@ export default function AdminPage() {
         phone: org.phone ?? "",
         email: org.email ?? "",
       });
+
+      if (loadTeacherError) {
+        setTeacherError(loadTeacherError.message ?? "Could not load teacher directory.");
+        setTeachers([]);
+      } else {
+        setTeachers(sortTeachers((teacherRows ?? []) as TeacherDirectoryRow[]));
+      }
+
       setOrgLoading(false);
+      setTeacherLoading(false);
     };
 
     void loadOrgSettings();
@@ -164,10 +210,83 @@ export default function AdminPage() {
     setOrgSaving(false);
   };
 
+  const resetTeacherForm = () => {
+    setTeacherForm(EMPTY_TEACHER_FORM);
+    setEditingTeacherId(null);
+    setTeacherSaved(false);
+  };
+
+  const saveTeacher = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (!orgId) {
+      setTeacherError("Could not determine your organization.");
+      return;
+    }
+
+    const trimmedName = teacherForm.name.trim();
+    if (!trimmedName) {
+      setTeacherError("Teacher name is required.");
+      return;
+    }
+
+    setTeacherSaving(true);
+    setTeacherError(null);
+    setTeacherSaved(false);
+
+    const payload = {
+      name: trimmedName,
+      email: cleanOptionalValue(teacherForm.email),
+      phone: cleanOptionalValue(teacherForm.phone),
+    };
+
+    const query = editingTeacherId
+      ? supabase
+        .from("teachers")
+        .update(payload)
+        .eq("id", editingTeacherId)
+        .eq("org_id", orgId)
+      : supabase
+        .from("teachers")
+        .insert({ org_id: orgId, ...payload });
+
+    const { data, error } = await query
+      .select("id, name, email, phone")
+      .single() as { data: TeacherDirectoryRow | null; error: any };
+
+    if (error || !data) {
+      setTeacherError(error?.message ?? "Could not save this teacher.");
+      setTeacherSaving(false);
+      return;
+    }
+
+    setTeachers((current) => {
+      const withoutEdited = current.filter((teacher) => teacher.id !== data.id);
+      return sortTeachers([...withoutEdited, data]);
+    });
+    setTeacherForm({ name: data.name, email: data.email ?? "", phone: data.phone ?? "" });
+    setEditingTeacherId(data.id);
+    setTeacherSaved(true);
+    setTeacherSaving(false);
+  };
+
+  const startEditingTeacher = (teacher: TeacherDirectoryRow) => {
+    setEditingTeacherId(teacher.id);
+    setTeacherForm({
+      name: teacher.name,
+      email: teacher.email ?? "",
+      phone: teacher.phone ?? "",
+    });
+    setTeacherError(null);
+    setTeacherSaved(false);
+    setTab("teachers");
+  };
+
   const TABS: { id: AdminTab; label: string }[] = [
     { id: "plan", label: "Plan Limits" },
     { id: "columns", label: "Custom Columns" },
     { id: "notifications", label: "Notification Rules" },
+    { id: "teachers", label: "Teachers" },
     { id: "users", label: "Users" },
   ];
 
@@ -413,6 +532,136 @@ export default function AdminPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── Teachers tab ─────────────────────────────────────────────────── */}
+        {tab === "teachers" && (
+          <div className="max-w-4xl space-y-5">
+            <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="card overflow-hidden">
+                <div className="border-b border-cream-border bg-parchment px-5 py-4">
+                  <h2 className="font-display font-black text-lg text-ink">Teacher Directory</h2>
+                  <p className="mt-1 text-sm text-ink-light">
+                    These org-scoped teacher records power original-teacher and substitute-teacher selection on check-in lists.
+                  </p>
+                </div>
+
+                {teacherError && (
+                  <div className="mx-5 mt-5 rounded-2xl bg-blush-light px-4 py-3 text-sm text-blush">
+                    {teacherError}
+                  </div>
+                )}
+
+                <div className="p-5">
+                  {teacherLoading ? (
+                    <p className="text-sm text-ink-light">Loading teacher directory…</p>
+                  ) : teachers.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-cream-border bg-white px-4 py-5 text-sm text-ink-light">
+                      No teachers saved yet. Add your first teacher record to enable org-scoped teacher selection on lists.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {teachers.map((teacher) => (
+                        <div key={teacher.id} className="flex items-start gap-4 rounded-2xl border border-cream-border bg-white px-4 py-4">
+                          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-sky-light text-sm font-black text-sky">
+                            {teacher.name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("") || "T"}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-bold text-ink">{teacher.name}</p>
+                            <div className="mt-1 space-y-0.5 text-xs text-ink-light">
+                              <p>{teacher.email || "No email saved"}</p>
+                              <p>{teacher.phone || "No phone saved"}</p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => startEditingTeacher(teacher)}
+                            className="btn-ghost px-3 py-2 text-xs"
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <form onSubmit={saveTeacher} className="card p-6 space-y-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="font-display font-black text-lg text-ink">
+                      {editingTeacherId ? "Edit Teacher" : "Add Teacher"}
+                    </h2>
+                    <p className="mt-1 text-sm text-ink-light">
+                      Save a name plus optional email and phone for directory-backed list assignment.
+                    </p>
+                  </div>
+                  {editingTeacherId && (
+                    <button type="button" onClick={resetTeacherForm} className="btn-ghost px-3 py-2 text-xs">
+                      New record
+                    </button>
+                  )}
+                </div>
+
+                {teacherSaved && (
+                  <div className="rounded-2xl bg-sage-light px-4 py-3 text-sm text-sage-dark">
+                    Teacher directory saved.
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-ink-light">Teacher Name</span>
+                    <input
+                      value={teacherForm.name}
+                      onChange={(event) => {
+                        setTeacherSaved(false);
+                        setTeacherForm((current) => ({ ...current, name: event.target.value }));
+                      }}
+                      placeholder="Ms. Rivera"
+                      className="input-warm"
+                      disabled={teacherSaving}
+                      required
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-ink-light">Email</span>
+                    <input
+                      type="email"
+                      value={teacherForm.email}
+                      onChange={(event) => {
+                        setTeacherSaved(false);
+                        setTeacherForm((current) => ({ ...current, email: event.target.value }));
+                      }}
+                      placeholder="teacher@school.edu"
+                      className="input-warm"
+                      disabled={teacherSaving}
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-ink-light">Phone</span>
+                    <input
+                      type="tel"
+                      value={teacherForm.phone}
+                      onChange={(event) => {
+                        setTeacherSaved(false);
+                        setTeacherForm((current) => ({ ...current, phone: event.target.value }));
+                      }}
+                      placeholder="(555) 123-4567"
+                      className="input-warm"
+                      disabled={teacherSaving}
+                    />
+                  </label>
+                </div>
+
+                <button type="submit" disabled={teacherSaving || teacherLoading} className="btn-primary px-5 py-3 text-sm disabled:opacity-50">
+                  {teacherSaving ? "Saving…" : editingTeacherId ? "Save teacher" : "Add teacher"}
+                </button>
+              </form>
             </div>
           </div>
         )}

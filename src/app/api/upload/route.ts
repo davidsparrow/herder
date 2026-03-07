@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { extractListFromImage, extractListFromText, getGeminiErrorDiagnostics } from "@/lib/gemini";
-import { canCreateList } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // Gemini vision can be slow
@@ -173,20 +172,6 @@ export async function POST(req: NextRequest) {
   if (!profile) return NextResponse.json({ error: "Profile not found" }, { status: 404 });
 
   console.log("[upload] profile details:", { org_id: profile.org_id, plan_tier: profile.plan_tier });
-
-  // Plan gate: count existing lists for this org
-  const { count, error: countError } = await supabase
-    .from("checkin_lists")
-    .select("*", { count: "exact", head: true })
-    .eq("org_id", profile.org_id)
-    .eq("archived", false);
-
-  console.log("[upload] checkin_lists count:", { count, countError: countError?.message ?? null });
-
-  const gate = canCreateList(profile.plan_tier, count ?? 0);
-  if (!gate.allowed) {
-    return NextResponse.json({ error: gate.reason, code: "PLAN_LIMIT" }, { status: 402 });
-  }
 
   const contentType = req.headers.get("content-type") ?? "";
   console.log("[upload] request metadata:", { contentType });
