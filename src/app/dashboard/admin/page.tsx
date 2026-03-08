@@ -1,47 +1,23 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { PLANS, type PlanTier } from "@/lib/plans";
 import { createClient } from "@/lib/supabase/client";
-import type { Org } from "@/lib/types";
+import type { Org, Teacher } from "@/lib/types";
 
-const TIERS: PlanTier[] = ["free", "standard", "pro"];
-
-interface PlanOverride {
-  maxLists: number | null;
-  maxNamesPerList: number | null;
-  customColumns: boolean;
-  notifications: boolean;
-}
-
-const DEFAULT_OVERRIDES: Record<PlanTier, PlanOverride> = {
-  free: { maxLists: 3, maxNamesPerList: 20, customColumns: false, notifications: true }, // MVP: Enabled for free
-  standard: { maxLists: null, maxNamesPerList: null, customColumns: true, notifications: false },
-  pro: { maxLists: null, maxNamesPerList: null, customColumns: true, notifications: true },
-};
-
-const GLOBAL_COLUMNS_INIT = [
-  { id: "c1", name: "Guardian Phone", type: "phone", required: true },
-  { id: "c2", name: "Allergies", type: "text", required: false },
-  { id: "c3", name: "Pickup Location", type: "text", required: false },
-  { id: "c4", name: "Notif. Channel", type: "select", required: false },
-  { id: "c5", name: "Notif. Preference", type: "select", required: false },
-];
-
-const NOTIF_RULES_INIT = [
-  { event: "Check-in submitted", recipients: "Admin + Teachers", channel: "Email", active: true },
-  { event: "Student absent", recipients: "Guardian", channel: "SMS", active: true },
-  { event: "Student checked in", recipients: "Guardian", channel: "SMS", active: true },
-  { event: "Off-campus arrival", recipients: "Guardian + Admin", channel: "SMS", active: false },
-  { event: "Emergency alert", recipients: "All", channel: "SMS+Email", active: true },
-];
-
-type AdminTab = "plan" | "columns" | "notifications" | "users";
+type AdminTab = "plan" | "columns" | "notifications" | "teachers" | "users";
 type OrgSettingsForm = {
   name: string;
   phone: string;
   email: string;
 };
+
+type TeacherForm = {
+  name: string;
+  email: string;
+  phone: string;
+};
+
+type TeacherDirectoryRow = Pick<Teacher, "id" | "name" | "email" | "phone">;
 
 const EMPTY_ORG_SETTINGS: OrgSettingsForm = {
   name: "",
@@ -49,30 +25,62 @@ const EMPTY_ORG_SETTINGS: OrgSettingsForm = {
   email: "",
 };
 
+const EMPTY_TEACHER_FORM: TeacherForm = {
+  name: "",
+  email: "",
+  phone: "",
+};
+
 function cleanOptionalValue(value: string) {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 }
 
+function sortTeachers(rows: TeacherDirectoryRow[]) {
+  return [...rows].sort((left, right) => left.name.localeCompare(right.name) || (left.email ?? "").localeCompare(right.email ?? ""));
+}
+
+function AdminUnavailableState({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="max-w-2xl rounded-3xl border border-dashed border-cream-border bg-white p-6">
+      <p className="text-xs font-bold uppercase tracking-widest text-ink-light">Unavailable for now</p>
+      <h2 className="mt-2 font-display text-xl font-black tracking-tight text-ink">{title}</h2>
+      <p className="mt-3 text-sm leading-relaxed text-ink-light">{description}</p>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const supabase = useMemo(() => createClient(), []);
   const [tab, setTab] = useState<AdminTab>("plan");
-  const [overrides, setOverrides] = useState(DEFAULT_OVERRIDES);
-  const [columns, setColumns] = useState(GLOBAL_COLUMNS_INIT);
-  const [rules, setRules] = useState(NOTIF_RULES_INIT);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [orgSettings, setOrgSettings] = useState<OrgSettingsForm>(EMPTY_ORG_SETTINGS);
   const [orgLoading, setOrgLoading] = useState(true);
   const [orgSaving, setOrgSaving] = useState(false);
   const [orgError, setOrgError] = useState<string | null>(null);
   const [orgSaved, setOrgSaved] = useState(false);
+  const [teachers, setTeachers] = useState<TeacherDirectoryRow[]>([]);
+  const [teacherForm, setTeacherForm] = useState<TeacherForm>(EMPTY_TEACHER_FORM);
+  const [teacherLoading, setTeacherLoading] = useState(true);
+  const [teacherSaving, setTeacherSaving] = useState(false);
+  const [teacherError, setTeacherError] = useState<string | null>(null);
+  const [teacherSaved, setTeacherSaved] = useState(false);
+  const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
 
     const loadOrgSettings = async () => {
       setOrgLoading(true);
+      setTeacherLoading(true);
       setOrgError(null);
+      setTeacherError(null);
 
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (!active) return;
@@ -97,17 +105,27 @@ export default function AdminPage() {
         return;
       }
 
-      const { data: org, error: loadOrgError } = await supabase
-        .from("orgs")
-        .select("id, name, phone, email")
-        .eq("id", profile.org_id)
-        .single() as { data: Pick<Org, "id" | "name" | "phone" | "email"> | null; error: any };
+      const [{ data: org, error: loadOrgError }, { data: teacherRows, error: loadTeacherError }] = await Promise.all([
+        supabase
+          .from("orgs")
+          .select("id, name, phone, email")
+          .eq("id", profile.org_id)
+          .single(),
+        supabase
+          .from("teachers")
+          .select("id, name, email, phone")
+          .order("name", { ascending: true }),
+      ]) as [
+        { data: Pick<Org, "id" | "name" | "phone" | "email"> | null; error: any },
+        { data: TeacherDirectoryRow[] | null; error: any },
+      ];
 
       if (!active) return;
 
       if (loadOrgError || !org) {
         setOrgError(loadOrgError?.message ?? "Could not load organization settings.");
         setOrgLoading(false);
+        setTeacherLoading(false);
         return;
       }
 
@@ -117,7 +135,16 @@ export default function AdminPage() {
         phone: org.phone ?? "",
         email: org.email ?? "",
       });
+
+      if (loadTeacherError) {
+        setTeacherError(loadTeacherError.message ?? "Could not load teacher directory.");
+        setTeachers([]);
+      } else {
+        setTeachers(sortTeachers((teacherRows ?? []) as TeacherDirectoryRow[]));
+      }
+
       setOrgLoading(false);
+      setTeacherLoading(false);
     };
 
     void loadOrgSettings();
@@ -164,10 +191,83 @@ export default function AdminPage() {
     setOrgSaving(false);
   };
 
+  const resetTeacherForm = () => {
+    setTeacherForm(EMPTY_TEACHER_FORM);
+    setEditingTeacherId(null);
+    setTeacherSaved(false);
+  };
+
+  const saveTeacher = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (!orgId) {
+      setTeacherError("Could not determine your organization.");
+      return;
+    }
+
+    const trimmedName = teacherForm.name.trim();
+    if (!trimmedName) {
+      setTeacherError("Teacher name is required.");
+      return;
+    }
+
+    setTeacherSaving(true);
+    setTeacherError(null);
+    setTeacherSaved(false);
+
+    const payload = {
+      name: trimmedName,
+      email: cleanOptionalValue(teacherForm.email),
+      phone: cleanOptionalValue(teacherForm.phone),
+    };
+
+    const query = editingTeacherId
+      ? supabase
+        .from("teachers")
+        .update(payload)
+        .eq("id", editingTeacherId)
+        .eq("org_id", orgId)
+      : supabase
+        .from("teachers")
+        .insert({ org_id: orgId, ...payload });
+
+    const { data, error } = await query
+      .select("id, name, email, phone")
+      .single() as { data: TeacherDirectoryRow | null; error: any };
+
+    if (error || !data) {
+      setTeacherError(error?.message ?? "Could not save this teacher.");
+      setTeacherSaving(false);
+      return;
+    }
+
+    setTeachers((current) => {
+      const withoutEdited = current.filter((teacher) => teacher.id !== data.id);
+      return sortTeachers([...withoutEdited, data]);
+    });
+    setTeacherForm({ name: data.name, email: data.email ?? "", phone: data.phone ?? "" });
+    setEditingTeacherId(data.id);
+    setTeacherSaved(true);
+    setTeacherSaving(false);
+  };
+
+  const startEditingTeacher = (teacher: TeacherDirectoryRow) => {
+    setEditingTeacherId(teacher.id);
+    setTeacherForm({
+      name: teacher.name,
+      email: teacher.email ?? "",
+      phone: teacher.phone ?? "",
+    });
+    setTeacherError(null);
+    setTeacherSaved(false);
+    setTab("teachers");
+  };
+
   const TABS: { id: AdminTab; label: string }[] = [
     { id: "plan", label: "Plan Limits" },
     { id: "columns", label: "Custom Columns" },
     { id: "notifications", label: "Notification Rules" },
+    { id: "teachers", label: "Teachers" },
     { id: "users", label: "Users" },
   ];
 
@@ -276,179 +376,164 @@ export default function AdminPage() {
 
         {/* ── Plan Limits tab ─────────────────────────────────────────────── */}
         {tab === "plan" && (
-          <div className="space-y-5 max-w-3xl">
-            <p className="text-sm text-ink-light leading-relaxed">
-              These are the default limits for each plan tier. Override them here per-org (e.g. to give a school a custom allowance). Leave blank for unlimited.
-            </p>
-            {TIERS.map(tier => {
-              const plan = PLANS[tier];
-              const ov = overrides[tier];
-              return (
-                <div key={tier} className="card p-6">
-                  <div className="flex items-center gap-3 mb-5">
-                    <span className="text-2xl">{plan.badge}</span>
-                    <div>
-                      <h2 className="font-display font-black text-lg text-ink">{plan.name}</h2>
-                      <p className="text-xs text-ink-light">{plan.price}</p>
-                    </div>
-                    <span className="ml-auto badge bg-cream-deep text-ink-light">{plan.description.split(" ").slice(0, 4).join(" ")}…</span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4 mb-4">
-                    <div>
-                      <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">
-                        Max Lists
-                      </label>
-                      <input
-                        type="number" min={1} placeholder="Unlimited"
-                        value={ov.maxLists ?? ""}
-                        onChange={e => setOverrides(p => ({
-                          ...p,
-                          [tier]: { ...p[tier], maxLists: e.target.value ? Number(e.target.value) : null }
-                        }))}
-                        className="input-warm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">
-                        Max Names / List
-                      </label>
-                      <input
-                        type="number" min={1} placeholder="Unlimited"
-                        value={ov.maxNamesPerList ?? ""}
-                        onChange={e => setOverrides(p => ({
-                          ...p,
-                          [tier]: { ...p[tier], maxNamesPerList: e.target.value ? Number(e.target.value) : null }
-                        }))}
-                        className="input-warm"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-6">
-                    {[
-                      { key: "customColumns" as const, label: "Custom Columns" },
-                      { key: "notifications" as const, label: "Notifications" },
-                    ].map(f => (
-                      <label key={f.key} className="flex items-center gap-2.5 cursor-pointer">
-                        <button
-                          onClick={() => setOverrides(p => ({
-                            ...p,
-                            [tier]: { ...p[tier], [f.key]: !p[tier][f.key] }
-                          }))}
-                          className={`w-10 h-6 rounded-full relative transition-colors duration-200 ${ov[f.key] ? "bg-sage" : "bg-cream-border"
-                            }`}
-                        >
-                          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all duration-200 ${ov[f.key] ? "left-5" : "left-1"
-                            }`} />
-                        </button>
-                        <span className="text-sm font-semibold text-ink-mid">{f.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <AdminUnavailableState
+            title="Plan overrides are not wired to live org data yet"
+            description="This screen no longer shows placeholder plan limits or fake per-tier overrides as if they were saved organization settings."
+          />
         )}
 
         {/* ── Custom Columns tab ────────────────────────────────────────────── */}
         {tab === "columns" && (
-          <div className="max-w-2xl space-y-4">
-            <p className="text-sm text-ink-light">
-              These columns appear on <strong>every</strong> check-in list in your organization (Standard + Pro). Teachers see them when uploading a new list.
-            </p>
-            <div className="card overflow-hidden">
-              <div className="grid grid-cols-[1fr_100px_80px_80px] gap-3 px-5 py-3 bg-parchment border-b border-cream-border text-xs font-bold uppercase tracking-widest text-ink-light">
-                <span>Column Name</span><span>Type</span><span>Required</span><span>Remove</span>
-              </div>
-              {columns.map((col, i) => (
-                <div key={col.id} className="grid grid-cols-[1fr_100px_80px_80px] gap-3 px-5 py-3.5 border-b border-cream-border items-center last:border-0">
-                  <input value={col.name} onChange={e => setColumns(c => c.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
-                    className="input-warm py-2 text-sm" />
-                  <select value={col.type} onChange={e => setColumns(c => c.map((x, j) => j === i ? { ...x, type: e.target.value as "text" | "phone" | "select" | "boolean" } : x))}
-                    className="input-warm py-2 text-sm">
-                    {["text", "phone", "select", "boolean"].map(t => <option key={t}>{t}</option>)}
-                  </select>
-                  <div className="flex justify-center">
-                    <button onClick={() => setColumns(c => c.map((x, j) => j === i ? { ...x, required: !x.required } : x))}
-                      className={`w-10 h-6 rounded-full relative transition-colors ${col.required ? "bg-terra" : "bg-cream-border"}`}>
-                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all ${col.required ? "left-5" : "left-1"}`} />
-                    </button>
-                  </div>
-                  <div className="flex justify-center">
-                    <button onClick={() => setColumns(c => c.filter((_, j) => j !== i))}
-                      className="w-8 h-8 rounded-xl bg-blush-light text-blush text-sm font-bold hover:bg-blush hover:text-white transition-colors">✕</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <button onClick={() => setColumns(c => [...c, { id: `c${Date.now()}`, name: "New Column", type: "text", required: false }])}
-              className="btn-primary text-sm px-4 py-2.5">
-              + Add Column
-            </button>
-          </div>
+          <AdminUnavailableState
+            title="Global custom columns are not loaded from real settings here yet"
+            description="Placeholder column rows have been removed from this authenticated screen until the admin column manager is backed by persisted organization data."
+          />
         )}
 
         {/* ── Notification Rules tab ────────────────────────────────────────── */}
         {tab === "notifications" && (
-          <div className="max-w-2xl space-y-4">
-            <div className="bg-terra-light border border-terra/30 rounded-2xl px-5 py-4 text-sm text-terra-dark">
-              ℹ Notification rules fire on <strong>Free (BETA only) and Pro plans</strong>. Automated SMS + email are temporarily available for free users.
-            </div>
-            <div className="card overflow-hidden">
-              <div className="grid grid-cols-[2fr_1.5fr_1fr_64px] gap-3 px-5 py-3 bg-parchment border-b border-cream-border text-xs font-bold uppercase tracking-widest text-ink-light">
-                <span>Trigger</span><span>Recipients</span><span>Channel</span><span>Active</span>
-              </div>
-              {rules.map((r, i) => (
-                <div key={i} className="grid grid-cols-[2fr_1.5fr_1fr_64px] gap-3 px-5 py-3.5 border-b border-cream-border items-center last:border-0">
-                  <span className="text-sm font-medium text-ink">{r.event}</span>
-                  <span className="badge bg-sky-light text-sky text-xs">{r.recipients}</span>
-                  <span className="text-xs text-ink-light">{r.channel}</span>
-                  <div className="flex justify-center">
-                    <button onClick={() => setRules(rs => rs.map((x, j) => j === i ? { ...x, active: !x.active } : x))}
-                      className={`w-10 h-6 rounded-full relative transition-colors ${r.active ? "bg-sage" : "bg-cream-border"}`}>
-                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all ${r.active ? "left-5" : "left-1"}`} />
-                    </button>
-                  </div>
+          <AdminUnavailableState
+            title="Notification rules are not backed by persisted org configuration yet"
+            description="This page now avoids showing fabricated notification triggers, recipients, or active states as if they were your organization’s live rules."
+          />
+        )}
+
+        {/* ── Teachers tab ─────────────────────────────────────────────────── */}
+        {tab === "teachers" && (
+          <div className="max-w-4xl space-y-5">
+            <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="card overflow-hidden">
+                <div className="border-b border-cream-border bg-parchment px-5 py-4">
+                  <h2 className="font-display font-black text-lg text-ink">Teacher Directory</h2>
+                  <p className="mt-1 text-sm text-ink-light">
+                    These org-scoped teacher records power original-teacher and substitute-teacher selection on check-in lists.
+                  </p>
                 </div>
-              ))}
+
+                {teacherError && (
+                  <div className="mx-5 mt-5 rounded-2xl bg-blush-light px-4 py-3 text-sm text-blush">
+                    {teacherError}
+                  </div>
+                )}
+
+                <div className="p-5">
+                  {teacherLoading ? (
+                    <p className="text-sm text-ink-light">Loading teacher directory…</p>
+                  ) : teachers.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-cream-border bg-white px-4 py-5 text-sm text-ink-light">
+                      No teachers saved yet. Add your first teacher record to enable org-scoped teacher selection on lists.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {teachers.map((teacher) => (
+                        <div key={teacher.id} className="flex items-start gap-4 rounded-2xl border border-cream-border bg-white px-4 py-4">
+                          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-sky-light text-sm font-black text-sky">
+                            {teacher.name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("") || "T"}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-bold text-ink">{teacher.name}</p>
+                            <div className="mt-1 space-y-0.5 text-xs text-ink-light">
+                              <p>{teacher.email || "No email saved"}</p>
+                              <p>{teacher.phone || "No phone saved"}</p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => startEditingTeacher(teacher)}
+                            className="btn-ghost px-3 py-2 text-xs"
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <form onSubmit={saveTeacher} className="card p-6 space-y-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="font-display font-black text-lg text-ink">
+                      {editingTeacherId ? "Edit Teacher" : "Add Teacher"}
+                    </h2>
+                    <p className="mt-1 text-sm text-ink-light">
+                      Save a name plus optional email and phone for directory-backed list assignment.
+                    </p>
+                  </div>
+                  {editingTeacherId && (
+                    <button type="button" onClick={resetTeacherForm} className="btn-ghost px-3 py-2 text-xs">
+                      New record
+                    </button>
+                  )}
+                </div>
+
+                {teacherSaved && (
+                  <div className="rounded-2xl bg-sage-light px-4 py-3 text-sm text-sage-dark">
+                    Teacher directory saved.
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-ink-light">Teacher Name</span>
+                    <input
+                      value={teacherForm.name}
+                      onChange={(event) => {
+                        setTeacherSaved(false);
+                        setTeacherForm((current) => ({ ...current, name: event.target.value }));
+                      }}
+                      placeholder="Ms. Rivera"
+                      className="input-warm"
+                      disabled={teacherSaving}
+                      required
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-ink-light">Email</span>
+                    <input
+                      type="email"
+                      value={teacherForm.email}
+                      onChange={(event) => {
+                        setTeacherSaved(false);
+                        setTeacherForm((current) => ({ ...current, email: event.target.value }));
+                      }}
+                      placeholder="teacher@school.edu"
+                      className="input-warm"
+                      disabled={teacherSaving}
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-ink-light">Phone</span>
+                    <input
+                      type="tel"
+                      value={teacherForm.phone}
+                      onChange={(event) => {
+                        setTeacherSaved(false);
+                        setTeacherForm((current) => ({ ...current, phone: event.target.value }));
+                      }}
+                      placeholder="(555) 123-4567"
+                      className="input-warm"
+                      disabled={teacherSaving}
+                    />
+                  </label>
+                </div>
+
+                <button type="submit" disabled={teacherSaving || teacherLoading} className="btn-primary px-5 py-3 text-sm disabled:opacity-50">
+                  {teacherSaving ? "Saving…" : editingTeacherId ? "Save teacher" : "Add teacher"}
+                </button>
+              </form>
             </div>
           </div>
         )}
 
         {/* ── Users tab ─────────────────────────────────────────────────────── */}
         {tab === "users" && (
-          <div className="max-w-2xl space-y-4">
-            <div className="card overflow-hidden">
-              {[
-                { name: "Ms. Rivera", role: "admin", email: "rivera@school.edu", tier: "pro", absent: false },
-                { name: "Mr. Johnson", role: "teacher", email: "johnson@school.edu", tier: "standard", absent: false },
-                { name: "Ms. Chen", role: "teacher", email: "chen@school.edu", tier: "standard", absent: false },
-                { name: "Coach Davis", role: "teacher", email: "davis@school.edu", tier: "free", absent: true },
-              ].map((u, i, arr) => (
-                <div key={i} className={`flex items-center gap-4 px-5 py-4 ${i < arr.length - 1 ? "border-b border-cream-border" : ""}`}>
-                  <div className="w-10 h-10 rounded-2xl bg-cream-deep flex items-center justify-center text-sm font-black text-ink-light">
-                    {u.name.split(" ").map(n => n[0]).join("")}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-ink">{u.name}</p>
-                    <p className="text-xs text-ink-light">{u.email}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`badge ${u.role === "admin" ? "bg-terra-light text-terra-dark" : "bg-sky-light text-sky"}`}>
-                      {u.role}
-                    </span>
-                    <span className={`badge ${u.tier === "pro" ? "bg-terra-light text-terra-dark" :
-                      u.tier === "standard" ? "bg-sky-light text-sky" : "bg-cream-deep text-ink-light"
-                      }`}>{PLANS[u.tier as PlanTier].badge} {u.tier}</span>
-                    {u.absent && <span className="badge bg-blush-light text-blush">Absent</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <button className="btn-primary text-sm px-4 py-2.5">+ Invite user</button>
-          </div>
+          <AdminUnavailableState
+            title="The user directory is not connected to live profile data on this page yet"
+            description="Placeholder staff rows and invite controls were removed so signed-in admins do not see fabricated users, roles, or status badges presented as real organization members."
+          />
         )}
       </div>
     </div>

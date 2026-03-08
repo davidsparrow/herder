@@ -1,241 +1,1140 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import {
+  getSchemaDriftDiagnosticFromStrings,
+  getSchemaDriftUserMessage,
+  normalizeFlowId,
+} from "@/lib/flow-diagnostics";
+import { STUDENT_CUSTOM_FIELD_LABELS } from "@/lib/roster-persistence";
+import type {
+  Attendance,
+  CheckinList,
+  CheckinSubmitRequest,
+  CheckinSubmitResponse,
+  CheckinSession,
+  CustomColumn,
+  Student,
+  StudentWithStatus,
+  Teacher,
+} from "@/lib/types";
 
-const MOCK_STUDENTS = [
-  { id:"CW001", name:"Abby Thornton",  age:9,  guardian:"Lisa Thornton",   phone:"415-555-0101", allergy:"Peanuts",   status:null as "present"|"absent"|null },
-  { id:"CW002", name:"Ben Okafor",     age:8,  guardian:"James Okafor",    phone:"415-555-0102", allergy:null,        status:null as "present"|"absent"|null },
-  { id:"CW003", name:"Chloe Reyes",    age:10, guardian:"Maria Reyes",     phone:"415-555-0103", allergy:"Dairy",     status:null as "present"|"absent"|null },
-  { id:"CW004", name:"Dylan Park",     age:9,  guardian:"Sue Park",        phone:"415-555-0104", allergy:null,        status:null as "present"|"absent"|null },
-  { id:"CW005", name:"Emma Vasquez",   age:8,  guardian:"Roberto Vasquez", phone:"415-555-0105", allergy:"Tree Nuts", status:null as "present"|"absent"|null },
-  { id:"CW006", name:"Felix Nguyen",   age:10, guardian:"Lan Nguyen",      phone:"415-555-0106", allergy:null,        status:null as "present"|"absent"|null },
-  { id:"CW007", name:"Grace Kim",      age:9,  guardian:"David Kim",       phone:"415-555-0107", allergy:"Gluten",    status:null as "present"|"absent"|null },
-  { id:"CW008", name:"Henry Castro",   age:8,  guardian:"Ana Castro",      phone:"415-555-0108", allergy:null,        status:null as "present"|"absent"|null },
-  { id:"CW009", name:"Isla Bennett",   age:10, guardian:"Tom Bennett",     phone:"415-555-0109", allergy:"Shellfish", status:null as "present"|"absent"|null },
-  { id:"CW010", name:"Jaxon Morris",   age:9,  guardian:"Karen Morris",    phone:"415-555-0110", allergy:null,        status:null as "present"|"absent"|null },
-  { id:"CW011", name:"Kayla Torres",   age:8,  guardian:"Diana Torres",    phone:"415-555-0111", allergy:null,        status:null as "present"|"absent"|null },
-  { id:"CW012", name:"Liam Walsh",     age:10, guardian:"Fiona Walsh",     phone:"415-555-0112", allergy:"Eggs",      status:null as "present"|"absent"|null },
-];
+const SCHEMA_DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+const CUSTOM_FIELD_LABELS: Record<string, string> = STUDENT_CUSTOM_FIELD_LABELS;
 
 type FilterKey = "all" | "present" | "absent" | "unchecked";
 
-export default function CheckInPage() {
-  const [students, setStudents]     = useState(MOCK_STUDENTS.map(s => ({ ...s })));
-  const [search, setSearch]         = useState("");
-  const [filter, setFilter]         = useState<FilterKey>("all");
-  const [groupModal, setGroupModal] = useState(false);
-  const [submitModal, setSubmitModal] = useState(false);
-  const [submitted, setSubmitted]   = useState(false);
-  const [bouncingId, setBouncingId] = useState<string | null>(null);
+type CheckinListSummary = Pick<
+  CheckinList,
+  | "id"
+  | "name"
+  | "recurring_days"
+  | "recurring_time"
+  | "custom_columns"
+  | "created_at"
+  | "original_teacher_id"
+  | "substitute_teacher_id"
+  | "source_metadata"
+>;
 
-  const toggle = (id: string) => {
-    setBouncingId(id);
-    setTimeout(() => setBouncingId(null), 350);
-    setStudents(p => p.map(s => s.id === id
-      ? { ...s, status: s.status === "present" ? null : "present" } : s));
+type CheckinSessionSummary = Pick<
+  CheckinSession,
+  "id" | "list_id" | "session_date" | "submitted_at" | "sub_teacher_name" | "created_at"
+>;
+
+type AttendanceRow = Pick<Attendance, "student_id" | "status" | "checkin_type">;
+type TeacherSummary = Pick<Teacher, "id" | "name" | "email" | "phone">;
+
+type UpdateListTeacherApiResponse = {
+  success?: true;
+  data?: Pick<CheckinList, "id" | "original_teacher_id" | "substitute_teacher_id">;
+  error?: string;
+};
+
+type AddStudentApiResponse = {
+  success?: true;
+  data?: Student;
+  error?: string;
+};
+
+type AddStudentForm = {
+  name: string;
+  firstName: string;
+  lastName: string;
+  childSheetNumber: string;
+  guardianName: string;
+  guardianPhone: string;
+  guardianEmail: string;
+  shortCode: string;
+  pickupDropLocation: string;
+  allergies: string;
+  specialNeeds: string;
+};
+
+const EMPTY_ADD_STUDENT_FORM: AddStudentForm = {
+  name: "",
+  firstName: "",
+  lastName: "",
+  childSheetNumber: "",
+  guardianName: "",
+  guardianPhone: "",
+  guardianEmail: "",
+  shortCode: "",
+  pickupDropLocation: "",
+  allergies: "",
+  specialNeeds: "",
+};
+
+function shortId(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return `${value.slice(0, 8)}…`;
+}
+
+function formatSessionDate(value: string) {
+  return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatTime(value: string | null) {
+  if (!value) {
+    return "Time not set";
+  }
+
+  const [hours, minutes] = value.split(":");
+  const parsedHours = Number(hours);
+  if (!Number.isFinite(parsedHours)) {
+    return value;
+  }
+
+  return new Date(2000, 0, 1, parsedHours, Number(minutes ?? 0)).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatRecurringSchedule(days: number[], time: string | null) {
+  const daySummary = days.length
+    ? days.map((day) => SCHEMA_DAY_LABELS[day] ?? `Day ${day}`).join(", ")
+    : "No recurring days saved";
+
+  return `${daySummary} · ${formatTime(time)}`;
+}
+
+function formatHeaderTimeRange(start: string | null, stop: string | null) {
+  const startLabel = start ? formatTime(start) : "";
+  const stopLabel = stop ? formatTime(stop) : "";
+
+  if (startLabel && stopLabel) {
+    return `${startLabel}–${stopLabel}`;
+  }
+
+  return startLabel || stopLabel || "";
+}
+
+function formatTimestamp(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return new Date(value).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function normalizeCustomFieldValue(value: string | boolean | null | undefined) {
+  if (typeof value === "boolean") {
+    return value ? "Yes" : "No";
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+
+  return null;
+}
+
+function labelForCustomField(key: string) {
+  return CUSTOM_FIELD_LABELS[key] ?? key.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatNotificationSummary(summary: CheckinSubmitResponse["data"]["notifications"]) {
+  if (!summary.enabled) {
+    return summary.skipped_reason ?? "Notifications were not sent.";
+  }
+
+  const parts = [`${summary.sent} sent`];
+
+  if (summary.missing_guardian_email > 0) {
+    parts.push(`${summary.missing_guardian_email} skipped (missing guardian email)`);
+  }
+
+  if (summary.failed > 0) {
+    parts.push(`${summary.failed} failed`);
+  }
+
+  if (summary.sent === 0 && summary.missing_guardian_email === 0 && summary.failed === 0 && summary.skipped > 0) {
+    parts.push(`${summary.skipped} skipped`);
+  }
+
+  return parts.join(" · ");
+}
+
+function getSafeCheckinLoadErrorMessage(message: string) {
+  return getSchemaDriftUserMessage("Real check-in", getSchemaDriftDiagnosticFromStrings(message)) ?? message;
+}
+
+function getSafeTeacherLoadErrorMessage(message: string) {
+  return getSchemaDriftUserMessage("Teacher directory access", getSchemaDriftDiagnosticFromStrings(message))
+    ?? `Teacher directory lookup failed: ${message}`;
+}
+
+function getCustomFieldEntries(customData: Student["custom_data"], customColumns: CustomColumn[]) {
+  const knownKeys = customColumns.map((column) => column.id);
+  const orderedKeys = [...knownKeys, ...Object.keys(customData).filter((key) => !knownKeys.includes(key))];
+
+  return orderedKeys.flatMap((key) => {
+    const value = normalizeCustomFieldValue(customData[key]);
+    if (!value) {
+      return [];
+    }
+
+    return [{ key, label: labelForCustomField(key), value }];
+  });
+}
+
+function HonestState({
+  title,
+  description,
+  tone = "neutral",
+}: {
+  title: string;
+  description: string;
+  tone?: "neutral" | "loading" | "error";
+}) {
+  const toneStyles = {
+    neutral: "bg-white text-ink",
+    loading: "bg-sky-light text-sky",
+    error: "bg-blush-light text-blush",
+  } as const;
+
+  return (
+    <div className="flex h-full items-center justify-center bg-cream px-6 py-10">
+      <div className={`max-w-xl rounded-3xl p-8 shadow-warm ${toneStyles[tone]}`}>
+        <h2 className="font-display text-2xl font-black tracking-tight">{title}</h2>
+        <p className="mt-3 text-sm leading-relaxed">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+export default function CheckInPage() {
+  const searchParams = useSearchParams();
+  const listId = searchParams.get("listId") ?? searchParams.get("list_id");
+  const sessionId = searchParams.get("sessionId") ?? searchParams.get("session_id");
+  const flowId = normalizeFlowId(searchParams.get("flowId"));
+  const supabase = useMemo(() => createClient(), []);
+
+  const [list, setList] = useState<CheckinListSummary | null>(null);
+  const [session, setSession] = useState<CheckinSessionSummary | null>(null);
+  const [students, setStudents] = useState<StudentWithStatus[]>([]);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<FilterKey>("all");
+  const [groupModal, setGroupModal] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitResult, setSubmitResult] = useState<CheckinSubmitResponse["data"] | null>(null);
+  const [bouncingId, setBouncingId] = useState<string | null>(null);
+  const [addStudentOpen, setAddStudentOpen] = useState(false);
+  const [addStudentForm, setAddStudentForm] = useState<AddStudentForm>(EMPTY_ADD_STUDENT_FORM);
+  const [addStudentError, setAddStudentError] = useState<string | null>(null);
+  const [addingStudent, setAddingStudent] = useState(false);
+  const [teachers, setTeachers] = useState<TeacherSummary[]>([]);
+  const [teacherLoadError, setTeacherLoadError] = useState<string | null>(null);
+  const [teacherEditorOpen, setTeacherEditorOpen] = useState(false);
+  const [teacherSaving, setTeacherSaving] = useState(false);
+  const [teacherSaveError, setTeacherSaveError] = useState<string | null>(null);
+  const [teacherAssignment, setTeacherAssignment] = useState({
+    originalTeacherId: "",
+    substituteEnabled: false,
+    substituteTeacherId: "",
+  });
+
+  useEffect(() => {
+    setSearch("");
+    setFilter("all");
+    setSubmitError(null);
+    setSubmitResult(null);
+
+    if (!listId || !sessionId) {
+      setList(null);
+      setSession(null);
+      setStudents([]);
+      setTeachers([]);
+      setTeacherLoadError(null);
+      setLoadError(null);
+      setLoading(false);
+      setAddStudentOpen(false);
+      setAddStudentError(null);
+      setTeacherEditorOpen(false);
+      setTeacherSaveError(null);
+      return;
+    }
+
+    let active = true;
+
+    const loadCheckinData = async () => {
+      setList(null);
+      setSession(null);
+      setStudents([]);
+      setLoading(true);
+      setLoadError(null);
+      setTeacherLoadError(null);
+      console.log("[checkin-ui] handoff load start:", {
+        flowId,
+        listId: shortId(listId) ?? listId,
+        sessionId: shortId(sessionId) ?? sessionId,
+      });
+
+      try {
+        const [listResult, sessionResult, studentsResult, attendanceResult, teachersResult] = await Promise.all([
+          supabase
+            .from("checkin_lists")
+            .select("id, name, recurring_days, recurring_time, custom_columns, created_at, original_teacher_id, substitute_teacher_id, source_metadata")
+            .eq("id", listId)
+            .eq("archived", false)
+            .maybeSingle(),
+          supabase
+            .from("checkin_sessions")
+            .select("id, list_id, session_date, submitted_at, sub_teacher_name, created_at")
+            .eq("id", sessionId)
+            .maybeSingle(),
+          supabase
+            .from("students")
+            .select("id, list_id, uid, name, first_name, last_name, custom_data, qr_code_url, created_at")
+            .eq("list_id", listId)
+            .order("uid"),
+          supabase
+            .from("attendance")
+            .select("student_id, status, checkin_type")
+            .eq("session_id", sessionId),
+          supabase
+            .from("teachers")
+            .select("id, name, email, phone")
+            .order("name", { ascending: true }),
+        ]);
+
+        if (!active) {
+          return;
+        }
+
+        if (listResult.error) {
+          console.error("[checkin-ui] list lookup failed:", {
+            flowId,
+            listId: shortId(listId) ?? listId,
+            schemaDrift: getSchemaDriftDiagnosticFromStrings(listResult.error.message),
+            error: listResult.error.message,
+          });
+          throw new Error(`List lookup failed: ${listResult.error.message}`);
+        }
+
+        if (sessionResult.error) {
+          console.error("[checkin-ui] session lookup failed:", {
+            flowId,
+            sessionId: shortId(sessionId) ?? sessionId,
+            error: sessionResult.error.message,
+          });
+          throw new Error(`Session lookup failed: ${sessionResult.error.message}`);
+        }
+
+        if (studentsResult.error) {
+          console.error("[checkin-ui] student lookup failed:", {
+            flowId,
+            listId: shortId(listId) ?? listId,
+            schemaDrift: getSchemaDriftDiagnosticFromStrings(studentsResult.error.message),
+            error: studentsResult.error.message,
+          });
+          throw new Error(`Student roster lookup failed: ${studentsResult.error.message}`);
+        }
+
+        if (attendanceResult.error) {
+          console.error("[checkin-ui] attendance lookup failed:", {
+            flowId,
+            sessionId: shortId(sessionId) ?? sessionId,
+            error: attendanceResult.error.message,
+          });
+          throw new Error(`Attendance lookup failed: ${attendanceResult.error.message}`);
+        }
+
+        const nextList = listResult.data as CheckinListSummary | null;
+        const nextSession = sessionResult.data as CheckinSessionSummary | null;
+        const nextStudents = (studentsResult.data ?? []) as Student[];
+        const nextAttendance = (attendanceResult.data ?? []) as AttendanceRow[];
+        const nextTeachers = (teachersResult.data ?? []) as TeacherSummary[];
+
+        if (!nextList) {
+          throw new Error(`No real check-in list was found for ${shortId(listId) ?? listId}.`);
+        }
+
+        if (!nextSession) {
+          throw new Error(`No real check-in session was found for ${shortId(sessionId) ?? sessionId}.`);
+        }
+
+        if (nextSession.list_id !== nextList.id) {
+          throw new Error("The selected session does not belong to the selected list.");
+        }
+
+        const attendanceByStudent = new Map(nextAttendance.map((row) => [row.student_id, row]));
+
+        const hydratedStudents: StudentWithStatus[] = nextStudents.map((student) => {
+          const attendance = attendanceByStudent.get(student.id);
+
+          return {
+            ...student,
+            status: attendance?.status ?? null,
+            checkin_type: attendance?.checkin_type ?? undefined,
+          };
+        });
+
+        setList(nextList);
+        setSession(nextSession);
+        setStudents(hydratedStudents);
+        if (teachersResult.error) {
+          setTeachers([]);
+          setTeacherLoadError(getSafeTeacherLoadErrorMessage(teachersResult.error.message));
+        } else {
+          setTeachers(nextTeachers);
+        }
+        console.log("[checkin-ui] handoff load success:", {
+          flowId,
+          listId: nextList.id,
+          sessionId: nextSession.id,
+          studentCount: hydratedStudents.length,
+          teacherCount: nextTeachers.length,
+          teacherLookupFailed: Boolean(teachersResult.error),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load the real check-in data.";
+        console.error("[checkin-ui] handoff load failed:", {
+          flowId,
+          listId: shortId(listId) ?? listId,
+          sessionId: shortId(sessionId) ?? sessionId,
+          schemaDrift: getSchemaDriftDiagnosticFromStrings(message),
+          error: message,
+        });
+        setList(null);
+        setSession(null);
+        setStudents([]);
+        setTeachers([]);
+        setLoadError(getSafeCheckinLoadErrorMessage(message));
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadCheckinData();
+
+    return () => {
+      active = false;
+    };
+  }, [listId, sessionId, supabase]);
+
+  useEffect(() => {
+    setTeacherAssignment({
+      originalTeacherId: list?.original_teacher_id ?? "",
+      substituteEnabled: Boolean(list?.substitute_teacher_id),
+      substituteTeacherId: list?.substitute_teacher_id ?? "",
+    });
+    setTeacherSaveError(null);
+    setTeacherEditorOpen(false);
+  }, [list?.id, list?.original_teacher_id, list?.substitute_teacher_id]);
+
+  const sessionSubmitted = Boolean(session?.submitted_at);
+  const interactionsDisabled = loading || submitting || sessionSubmitted;
+  const addStudentDisabled = loading || submitting || addingStudent;
+  const showingStaleContext = Boolean(
+    (list && listId && list.id !== listId) ||
+    (session && sessionId && session.id !== sessionId)
+  );
+  const originalTeacher = teachers.find((teacher) => teacher.id === list?.original_teacher_id) ?? null;
+  const substituteTeacher = teachers.find((teacher) => teacher.id === list?.substitute_teacher_id) ?? null;
+  const extractedTeacherName = list?.source_metadata.teacher_name?.trim() ?? "";
+
+  const saveTeacherAssignment = async () => {
+    if (!list) {
+      return;
+    }
+
+    setTeacherSaving(true);
+    setTeacherSaveError(null);
+
+    try {
+      const response = await fetch(`/api/lists/${list.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          originalTeacherId: teacherAssignment.originalTeacherId || null,
+          substituteTeacherId: teacherAssignment.substituteEnabled ? teacherAssignment.substituteTeacherId || null : null,
+        }),
+      });
+
+      const result = await response.json() as UpdateListTeacherApiResponse;
+      if (!response.ok || !result.data) {
+        throw new Error(result.error ?? "Could not update the teacher assignment for this list.");
+      }
+
+      const savedTeacherAssignment = result.data;
+
+      setList((current) => current ? {
+        ...current,
+        original_teacher_id: savedTeacherAssignment.original_teacher_id,
+        substitute_teacher_id: savedTeacherAssignment.substitute_teacher_id,
+      } : current);
+      setTeacherEditorOpen(false);
+    } catch (error) {
+      setTeacherSaveError(error instanceof Error ? error.message : "Could not update the teacher assignment for this list.");
+    } finally {
+      setTeacherSaving(false);
+    }
   };
 
-  const markAbsent = (id: string) => setStudents(p => p.map(s => s.id === id
-    ? { ...s, status: s.status === "absent" ? null : "absent" } : s));
+  const toggle = (id: string) => {
+    if (interactionsDisabled) {
+      return;
+    }
 
-  const present   = students.filter(s => s.status === "present").length;
-  const absent    = students.filter(s => s.status === "absent").length;
-  const unchecked = students.filter(s => s.status === null).length;
-  const pct       = Math.round((present / students.length) * 100);
+    setBouncingId(id);
+    setTimeout(() => setBouncingId(null), 350);
+    setStudents((current) => current.map((student) => (
+      student.id === id
+        ? { ...student, status: student.status === "present" ? null : "present", checkin_type: "manual" }
+        : student
+    )));
+  };
 
-  const filtered = students
-    .filter(s => s.name.toLowerCase().includes(search.toLowerCase()))
-    .filter(s => {
-      if (filter === "present")   return s.status === "present";
-      if (filter === "absent")    return s.status === "absent";
-      if (filter === "unchecked") return s.status === null;
-      return true;
-    });
+  const markAbsent = (id: string) => {
+    if (interactionsDisabled) {
+      return;
+    }
+
+    setStudents((current) => current.map((student) => (
+      student.id === id
+        ? { ...student, status: student.status === "absent" ? null : "absent", checkin_type: "manual" }
+        : student
+    )));
+  };
 
   const doGroup = () => {
-    setStudents(p => p.map(s => ({ ...s, status: s.status === null ? "present" : s.status })));
+    if (interactionsDisabled) {
+      return;
+    }
+
+    setStudents((current) => current.map((student) => ({
+      ...student,
+      status: student.status === null ? "present" : student.status,
+      checkin_type: student.status === null ? "group" : student.checkin_type,
+    })));
     setGroupModal(false);
   };
 
-  const doSubmit = async () => {
-    setSubmitModal(false);
-    // In production: POST /api/lists/submit with session_id + attendance
-    setSubmitted(true);
+  const submitNewStudent = async () => {
+    if (!list?.id || addStudentDisabled) {
+      return;
+    }
+
+    setAddingStudent(true);
+    setAddStudentError(null);
+
+    try {
+      const response = await fetch(`/api/lists/${list.id}/students`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(addStudentForm),
+      });
+
+      const result = await response.json() as AddStudentApiResponse;
+      if (!response.ok || !result.data) {
+        throw new Error(result.error ?? "Failed to add the student to this list.");
+      }
+
+      const createdStudent = result.data;
+
+      setStudents((current) => ([
+        ...current,
+        { ...createdStudent, status: null, checkin_type: undefined },
+      ]).sort((left, right) => (left.uid ?? "").localeCompare(right.uid ?? "")));
+      setAddStudentOpen(false);
+      setAddStudentForm(EMPTY_ADD_STUDENT_FORM);
+    } catch (error) {
+      setAddStudentError(error instanceof Error ? error.message : "Failed to add the student to this list.");
+    } finally {
+      setAddingStudent(false);
+    }
   };
 
-  if (submitted) return (
-    <div className="flex flex-col items-center justify-center h-full bg-cream px-8 text-center">
-      <div className="text-7xl mb-5">🎉</div>
-      <h2 className="font-display font-black text-3xl text-ink tracking-tight mb-3">All done!</h2>
-      <p className="text-ink-light mb-8">{present} present · {absent} absent</p>
-      <div className="flex gap-3 flex-wrap justify-center mb-10">
-        <div className="bg-sage-light text-sage-dark rounded-2xl px-5 py-3 text-sm font-bold">
-          ✅ {present} arrival notifications queued
-        </div>
-        {absent > 0 && (
-          <div className="bg-gold-light text-gold rounded-2xl px-5 py-3 text-sm font-bold">
-            📲 {absent} absence alerts queued
-          </div>
-        )}
-      </div>
-      <button onClick={() => { setStudents(MOCK_STUDENTS.map(s=>({...s}))); setSubmitted(false); }}
-        className="btn-ghost px-6 py-3 text-sm">← Reset demo</button>
-    </div>
-  );
+  const submitCheckin = async () => {
+    if (!sessionId || interactionsDisabled || students.length === 0) {
+      return;
+    }
+
+    const attendanceRows = students.flatMap((student) => {
+      if (!student.status) {
+        return [];
+      }
+
+      return [{
+        student_id: student.id,
+        status: student.status,
+        checkin_type: student.checkin_type ?? "manual",
+      }];
+    });
+
+    if (attendanceRows.length !== students.length) {
+      setSubmitError("Every persisted student must be marked present or absent before you can submit the real session.");
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError(null);
+    setSubmitResult(null);
+
+    try {
+      const payload: CheckinSubmitRequest = {
+        session_id: sessionId,
+        attendance: attendanceRows,
+      };
+
+      const response = await fetch("/api/lists/submit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json() as CheckinSubmitResponse | { error?: string };
+      const responseError = "error" in result ? result.error : undefined;
+
+      if (!response.ok || !("success" in result) || !result.success) {
+        throw new Error(responseError ?? "Failed to submit the real check-in.");
+      }
+
+      setSession((current) => current ? { ...current, submitted_at: result.data.session.submitted_at } : current);
+      setSubmitResult(result.data);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "Failed to submit the real check-in.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const present = students.filter((student) => student.status === "present").length;
+  const absent = students.filter((student) => student.status === "absent").length;
+  const unchecked = students.filter((student) => student.status === null).length;
+  const pct = students.length ? Math.round((present / students.length) * 100) : 0;
+  const submitDisabled = interactionsDisabled || students.length === 0 || unchecked > 0;
+  const submittedAtLabel = formatTimestamp(session?.submitted_at ?? null);
+  const notificationSummary = submitResult ? formatNotificationSummary(submitResult.notifications) : null;
+  const displayedTeacherName = originalTeacher?.name ?? (extractedTeacherName || "Teacher not assigned");
+  const displayedTeacherEmail = teacherLoadError
+    ?? originalTeacher?.email
+    ?? (originalTeacher ? "No email saved" : extractedTeacherName ? "Directory match not confirmed" : "No teacher selected");
+  const displayedTeacherPhone = originalTeacher?.phone
+    || (originalTeacher ? "No phone saved" : extractedTeacherName ? "Using extracted teacher metadata only" : "Use Edit teachers to assign one");
+  const headerTimeSummary = formatHeaderTimeRange(list?.source_metadata.start_time ?? list?.recurring_time ?? null, list?.source_metadata.stop_time ?? null);
+  const headerLocation = list?.source_metadata.room_location?.trim() ?? "";
+  const headerDetailSummary = [headerTimeSummary, headerLocation].filter(Boolean).join(" · ");
+
+  const filtered = students
+    .filter((student) => student.name.toLowerCase().includes(search.toLowerCase()))
+    .filter((student) => {
+      if (filter === "present") return student.status === "present";
+      if (filter === "absent") return student.status === "absent";
+      if (filter === "unchecked") return student.status === null;
+      return true;
+    });
+
+  if (!listId || !sessionId) {
+    return (
+      <HonestState
+        title="A real list and session are required"
+        description="Open Check-in from a real upload handoff or provide both `listId` and `sessionId` in the URL. This page no longer falls back to a demo roster when those real identifiers are missing."
+      />
+    );
+  }
+
+  if (loading || showingStaleContext || (!loadError && !list && !session)) {
+    return (
+      <HonestState
+        title="Loading real check-in data"
+        description={`Looking up list ${shortId(listId) ?? listId} and session ${shortId(sessionId) ?? sessionId} in Supabase.`}
+        tone="loading"
+      />
+    );
+  }
+
+  if (loadError || !list || !session) {
+    return (
+      <HonestState
+        title="Couldn't load this check-in"
+        description={loadError ?? "The real list or session could not be loaded."}
+        tone="error"
+      />
+    );
+  }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div className="bg-white border-b border-cream-border px-5 py-4 shadow-warm">
-        <div className="flex items-start justify-between mb-3">
-          <div>
-            <div className="flex items-center gap-2.5 mb-1">
-              <h2 className="font-display font-black text-xl text-ink tracking-tight">3rd Grade · Room 12</h2>
-              <span className="badge bg-gold-light text-gold text-xs">In Progress</span>
-            </div>
-            <p className="text-xs text-ink-light">Mon · Wed · Fri · 8:30 AM · 12 students</p>
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="border-b border-cream-border bg-white px-5 py-4 shadow-warm">
+        <div className="mb-4 rounded-2xl bg-sky-light px-4 py-3 text-xs font-medium text-sky">
+          Real data loaded from Supabase: list {shortId(list.id)} · session {shortId(session.id)} · {students.length} persisted students.
+          {sessionSubmitted
+            ? " This session is already submitted in the database, so statuses shown here are read-only."
+            : " Marking is a local draft until you submit; submitting writes real attendance rows and marks the real session submitted."}
+        </div>
+
+        {submitError && (
+          <div className="mb-4 rounded-2xl bg-blush-light px-4 py-3 text-xs font-medium text-blush">
+            Submit failed honestly: {submitError}
           </div>
+        )}
+
+        {submitting && (
+          <div className="mb-4 rounded-2xl bg-sky-light px-4 py-3 text-xs font-medium text-sky">
+            Submitting real attendance rows for session {shortId(session.id)} and using persisted roster/org notification inputs.
+          </div>
+        )}
+
+        {submitResult && sessionSubmitted && (
+          <div className="mb-4 rounded-2xl bg-sage-light px-4 py-3 text-xs font-medium text-sage-dark">
+            Real submission saved {submitResult.attendance_count} attendance rows in Supabase.
+            {notificationSummary ? ` Notifications: ${notificationSummary}.` : ""}
+          </div>
+        )}
+
+        <div className="mb-3 flex items-start justify-between gap-4">
+          <div>
+            <div className="mb-1 flex items-center gap-2.5">
+              <h2 className="font-display text-xl font-black tracking-tight text-ink">{list.name}</h2>
+              <span className="badge bg-sage-light text-xs text-sage-dark">Real roster</span>
+              {sessionSubmitted && <span className="badge bg-gold-light text-xs text-gold">Submitted</span>}
+            </div>
+            <p className="text-xs text-ink-light">
+              {formatSessionDate(session.session_date)} · {students.length} students · {formatRecurringSchedule(list.recurring_days, list.recurring_time)}
+            </p>
+            {headerDetailSummary && (
+              <p className="mt-1 text-[11px] text-ink-light">
+                Header · {headerDetailSummary}
+              </p>
+            )}
+            <p className="mt-1 text-[11px] text-ink-light">
+              List {shortId(list.id)} · Session {shortId(session.id)}
+              {!substituteTeacher && session.sub_teacher_name ? ` · Legacy session sub teacher: ${session.sub_teacher_name}` : ""}
+            </p>
+          </div>
+
           <div className="flex gap-2">
-            <button onClick={() => setGroupModal(true)}
-              className="btn-ghost px-3.5 py-2 text-xs">Group ✓</button>
             <button
-              onClick={() => unchecked === 0 ? setSubmitModal(true) : null}
-              disabled={unchecked > 0}
-              className={`px-4 py-2 text-xs font-bold rounded-xl transition-all ${
-                unchecked === 0 ? "btn-sage" : "bg-cream-deep text-ink-light cursor-not-allowed"
-              }`}>
-              {unchecked > 0 ? `${unchecked} left` : "Submit →"}
+              onClick={() => setTeacherEditorOpen(true)}
+              disabled={teacherSaving}
+              className="btn-ghost px-3.5 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Edit teachers
+            </button>
+            <button
+              onClick={() => {
+                setAddStudentError(null);
+                setAddStudentForm(EMPTY_ADD_STUDENT_FORM);
+                setAddStudentOpen(true);
+              }}
+              disabled={addStudentDisabled}
+              className="btn-ghost px-3.5 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              + Student
+            </button>
+            <button
+              onClick={() => setGroupModal(true)}
+              disabled={interactionsDisabled || students.length === 0 || unchecked === 0}
+              className="btn-ghost px-3.5 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Group ✓
+            </button>
+            <button
+              onClick={submitCheckin}
+              disabled={submitDisabled}
+              className={`rounded-xl px-4 py-2 text-xs font-bold transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+                submitDisabled ? "bg-cream-deep text-ink-light" : "bg-ink text-white hover:opacity-90"
+              }`}
+            >
+              {sessionSubmitted ? "Submitted" : submitting ? "Submitting…" : "Submit Check-in"}
             </button>
           </div>
         </div>
 
-        {/* Progress */}
-        <div className="flex items-center gap-3 mb-3">
-          <div className="flex-1 h-2 bg-cream-deep rounded-full overflow-hidden">
-            <div style={{ width: `${pct}%` }}
-              className="h-full bg-gradient-to-r from-sage to-[#6FBE9A] rounded-full transition-all duration-500" />
+        {(teacherLoadError || originalTeacher || substituteTeacher || extractedTeacherName) && (
+          <div className="mb-4 grid gap-3 lg:grid-cols-2">
+            {substituteTeacher && (
+              <div className="rounded-2xl border border-terra/30 bg-terra-light px-4 py-4">
+                <p className="text-xs font-bold uppercase tracking-widest text-terra-dark">Substitute Teacher</p>
+                <p className="mt-2 text-lg font-black text-ink">{substituteTeacher.name}</p>
+                <div className="mt-1 space-y-0.5 text-xs text-ink-light">
+                  <p>{substituteTeacher.email || "No email saved"}</p>
+                  <p>{substituteTeacher.phone || "No phone saved"}</p>
+                </div>
+              </div>
+            )}
+
+            {(originalTeacher || extractedTeacherName || teacherLoadError) && (
+              <div className={`rounded-2xl border px-4 py-4 ${substituteTeacher ? "border-cream-border bg-parchment" : "border-sky/30 bg-sky-light/60"}`}>
+                <p className="text-xs font-bold uppercase tracking-widest text-ink-light">
+                  {substituteTeacher ? "Original Teacher" : "Teacher"}
+                </p>
+                <p className="mt-2 text-lg font-black text-ink">
+                  {displayedTeacherName}
+                </p>
+                <div className="mt-1 space-y-0.5 text-xs text-ink-light">
+                  <p>{displayedTeacherEmail}</p>
+                  <p>{displayedTeacherPhone}</p>
+                </div>
+              </div>
+            )}
           </div>
-          <span className="text-xs font-bold text-sage-dark min-w-[36px]">{pct}%</span>
+        )}
+
+        <div className="mb-3 flex items-center gap-3">
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-cream-deep">
+            <div
+              style={{ width: `${pct}%` }}
+              className="h-full rounded-full bg-gradient-to-r from-sage to-[#6FBE9A] transition-all duration-500"
+            />
+          </div>
+          <span className="min-w-[36px] text-xs font-bold text-sage-dark">{pct}%</span>
         </div>
 
-        {/* Filters */}
         <div className="flex gap-2">
           {([
-            { key:"present",   label:"present",   val:present,   on:"bg-sage-light border-sage/40 text-sage-dark",   off:"text-ink-light" },
-            { key:"absent",    label:"absent",    val:absent,    on:"bg-gold-light border-gold/40 text-gold",          off:"text-ink-light" },
-            { key:"unchecked", label:"unchecked", val:unchecked, on:"bg-cream-deep border-cream-border text-ink-mid",  off:"text-ink-light" },
-          ] as const).map(f => (
-            <button key={f.key}
-              onClick={() => setFilter(fl => fl === f.key ? "all" : f.key)}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
-                filter === f.key ? f.on + " border" : "border-transparent " + f.off + " hover:bg-cream-deep"
-              }`}>
-              <strong className="text-sm mr-1">{f.val}</strong>{f.label}
+            { key: "present", label: "present", val: present, on: "bg-sage-light border-sage/40 text-sage-dark", off: "text-ink-light" },
+            { key: "absent", label: "absent", val: absent, on: "bg-gold-light border-gold/40 text-gold", off: "text-ink-light" },
+            { key: "unchecked", label: "unchecked", val: unchecked, on: "bg-cream-deep border-cream-border text-ink-mid", off: "text-ink-light" },
+          ] as const).map((option) => (
+            <button
+              key={option.key}
+              onClick={() => setFilter((current) => current === option.key ? "all" : option.key)}
+              className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all ${
+                filter === option.key ? `${option.on} border` : `border-transparent ${option.off} hover:bg-cream-deep`
+              }`}
+            >
+              <strong className="mr-1 text-sm">{option.val}</strong>
+              {option.label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Search */}
-      <div className="px-5 py-2.5 bg-parchment border-b border-cream-border">
+      <div className="border-b border-cream-border bg-parchment px-5 py-2.5">
         <div className="relative">
           <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-ink-light">🔍</span>
-          <input value={search} onChange={e => setSearch(e.target.value)}
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
             placeholder="Search students…"
-            className="input-warm pl-9 py-2.5 text-sm" />
+            className="input-warm py-2.5 pl-9 text-sm"
+          />
         </div>
       </div>
 
-      {/* Student list */}
       <div className="flex-1 overflow-y-auto">
-        {filtered.length === 0 && (
-          <p className="text-center text-ink-light text-sm py-12">No students match "{search}"</p>
-        )}
-        {filtered.map((s) => {
-          const initials = s.name.split(" ").map(n => n[0]).join("");
-          const bouncing = bouncingId === s.id;
-          return (
-            <div key={s.id}
-              className={`flex items-center gap-3.5 px-5 py-3.5 border-b border-cream-border transition-colors duration-200 ${
-                s.status === "present" ? "bg-sage/5" : s.status === "absent" ? "bg-gold/5" : "bg-white"
-              }`}>
-              {/* Avatar */}
-              <div className={`w-10 h-10 rounded-2xl flex-shrink-0 flex items-center justify-center text-xs font-black transition-all ${
-                s.status === "present" ? "bg-sage text-white shadow-sage" :
-                s.status === "absent"  ? "bg-gold text-white" : "bg-cream-deep text-ink-light"
-              }`}>{initials}</div>
+        {students.length === 0 ? (
+          <div className="px-5 py-12 text-center">
+            <p className="text-sm font-semibold text-ink">No real students were found for this list.</p>
+            <p className="mt-2 text-sm text-ink-light">
+              The selected list/session exists, but the roster query returned zero persisted student rows. No demo students are substituted here.
+            </p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <p className="py-12 text-center text-sm text-ink-light">No students match “{search}”</p>
+        ) : filtered.map((student) => {
+          const initials = student.name.split(" ").map((name) => name[0]).join("");
+          const bouncing = bouncingId === student.id;
+          const customFieldEntries = getCustomFieldEntries(student.custom_data, list.custom_columns);
+          const allergies = customFieldEntries.find((entry) => entry.key === "allergies");
+          const secondaryEntries = customFieldEntries.filter((entry) => entry.key !== "allergies");
 
-              {/* Info */}
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-bold transition-all ${
-                  s.status === "absent" ? "line-through opacity-50 text-ink" : "text-ink"
-                }`}>{s.name}</p>
-                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                  <span className="text-xs text-ink-light">{s.guardian}</span>
-                  {s.allergy && (
-                    <span className="text-xs font-bold text-blush bg-blush-light rounded-md px-1.5 py-0.5">
-                      ⚠ {s.allergy}
+          return (
+            <div
+              key={student.id}
+              className={`border-b border-cream-border px-5 py-3.5 transition-colors duration-200 ${
+                student.status === "present" ? "bg-sage/5" : student.status === "absent" ? "bg-gold/5" : "bg-white"
+              }`}
+            >
+              <div className="flex items-center gap-3.5">
+                <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl text-xs font-black transition-all ${
+                  student.status === "present"
+                    ? "bg-sage text-white shadow-sage"
+                    : student.status === "absent"
+                      ? "bg-gold text-white"
+                      : "bg-cream-deep text-ink-light"
+                }`}>{initials}</div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className={`text-sm font-bold transition-all ${
+                      student.status === "absent" ? "text-ink opacity-50 line-through" : "text-ink"
+                    }`}>{student.name}</p>
+                    <span className="rounded-md bg-cream-deep px-1.5 py-0.5 text-[10px] font-bold text-ink-light">
+                      {student.uid}
                     </span>
+                  </div>
+
+                  {secondaryEntries.length > 0 && (
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                      {secondaryEntries.map((entry) => (
+                        <span key={entry.key} className="text-xs text-ink-light">
+                          {entry.label}: {entry.value}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {allergies && (
+                    <div className="mt-2">
+                      <span className="rounded-md bg-blush-light px-1.5 py-0.5 text-xs font-bold text-blush">
+                        ⚠ {allergies.label}: {allergies.value}
+                      </span>
+                    </div>
                   )}
                 </div>
-              </div>
 
-              {/* Controls */}
-              <div className="flex items-center gap-2">
-                <button onClick={() => markAbsent(s.id)}
-                  className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${
-                    s.status === "absent"
-                      ? "bg-gold-light border-gold/60 text-gold"
-                      : "border-cream-border text-cream-border hover:border-gold/40 hover:text-gold"
-                  }`}>Absent</button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => markAbsent(student.id)}
+                    disabled={interactionsDisabled}
+                    className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+                      student.status === "absent"
+                        ? "border-gold/60 bg-gold-light text-gold"
+                        : "border-cream-border text-cream-border hover:border-gold/40 hover:text-gold"
+                    }`}
+                  >
+                    Absent
+                  </button>
 
-                <button onClick={() => toggle(s.id)}
-                  className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all duration-200 ${
-                    bouncing ? "animate-check" : ""
-                  } ${s.status === "present"
-                    ? "bg-sage shadow-sage text-white"
-                    : "bg-cream-deep text-cream-border hover:bg-cream-border"
-                  }`}>
-                  {s.status === "present" ? (
-                    <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
-                      <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  ) : (
-                    <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
-                      <path d="M2 6L6 10L14 2" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  )}
-                </button>
+                  <button
+                    onClick={() => toggle(student.id)}
+                    disabled={interactionsDisabled}
+                    className={`flex h-11 w-11 items-center justify-center rounded-2xl transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${
+                      bouncing ? "animate-check" : ""
+                    } ${student.status === "present"
+                      ? "bg-sage text-white shadow-sage"
+                      : "bg-cream-deep text-cream-border hover:bg-cream-border"
+                    }`}
+                  >
+                    {student.status === "present" ? (
+                      <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
+                        <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    ) : (
+                      <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
+                        <path d="M2 6L6 10L14 2" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Bottom bar */}
-      <div className="bg-white border-t border-cream-border px-5 py-3.5 flex items-center justify-between">
+      <div className="flex items-center justify-between border-t border-cream-border bg-white px-5 py-3.5">
         <p className="text-xs text-ink-light">
-          {unchecked > 0 ? `${unchecked} students still need to be marked` : "✨ Everyone accounted for — ready to submit!"}
+          {students.length === 0
+            ? "No persisted students are available for this real list yet."
+            : sessionSubmitted
+              ? submittedAtLabel
+                ? `This session was submitted in Supabase at ${submittedAtLabel}.${notificationSummary ? ` ${notificationSummary}.` : ""}`
+                : "This session has already been submitted in Supabase."
+              : submitting
+                ? "Submitting real attendance and session state now…"
+                : submitError
+                  ? `Submit failed: ${submitError}`
+              : unchecked > 0
+                  ? `${unchecked} students still need to be marked before submitting the real attendance.`
+                  : "Everyone is marked. Submit will persist the final attendance and session state to Supabase."}
         </p>
-        <button onClick={() => unchecked === 0 && setSubmitModal(true)} disabled={unchecked > 0}
-          className={`px-5 py-2.5 text-sm font-bold rounded-xl transition-all ${
-            unchecked === 0 ? "btn-sage" : "bg-cream-deep text-ink-light cursor-not-allowed"
-          }`}>
-          Submit Check-in
+        <button
+          onClick={submitCheckin}
+          disabled={submitDisabled}
+          className={`rounded-xl px-5 py-2.5 text-sm font-bold transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+            submitDisabled ? "bg-cream-deep text-ink-light" : "bg-ink text-white hover:opacity-90"
+          }`}
+        >
+          {sessionSubmitted ? "Submitted" : submitting ? "Submitting…" : "Submit Check-in"}
         </button>
       </div>
 
-      {/* Group modal */}
+      {teacherEditorOpen && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-ink/30 p-4 backdrop-blur-sm"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !teacherSaving) {
+              setTeacherEditorOpen(false);
+            }
+          }}
+        >
+          <div className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-warm-lg">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-display text-xl font-black tracking-tight text-ink">Edit teacher assignment</h3>
+                <p className="mt-1 text-sm text-ink-light">
+                  Choose the original teacher for this list and optionally highlight a substitute teacher while keeping the original visible.
+                </p>
+              </div>
+              <button
+                onClick={() => !teacherSaving && setTeacherEditorOpen(false)}
+                className="rounded-xl bg-cream-deep px-3 py-1.5 text-xs font-bold text-ink-light"
+              >
+                Close
+              </button>
+            </div>
+
+            {teacherSaveError && (
+              <div className="mb-4 rounded-2xl bg-blush-light px-4 py-3 text-sm text-blush">
+                {teacherSaveError}
+              </div>
+            )}
+
+            {teacherLoadError && (
+              <div className="mb-4 rounded-2xl bg-gold-light px-4 py-3 text-sm text-gold-dark">
+                {teacherLoadError}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="mb-2 block text-xs font-bold uppercase tracking-widest text-ink-light">Original Teacher</label>
+                <select
+                  value={teacherAssignment.originalTeacherId}
+                  onChange={(event) => {
+                    const nextOriginalTeacherId = event.target.value;
+                    setTeacherAssignment((current) => ({
+                      originalTeacherId: nextOriginalTeacherId,
+                      substituteEnabled: nextOriginalTeacherId ? current.substituteEnabled : false,
+                      substituteTeacherId: !nextOriginalTeacherId || nextOriginalTeacherId === current.substituteTeacherId ? "" : current.substituteTeacherId,
+                    }));
+                  }}
+                  className="input-warm"
+                  disabled={teacherSaving || teachers.length === 0}
+                >
+                  <option value="">{teachers.length === 0 ? "No teachers in directory yet" : "Select original teacher"}</option>
+                  {teachers.map((teacher) => (
+                    <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <label className={`flex items-start justify-between gap-4 rounded-2xl border px-4 py-3 ${teacherAssignment.originalTeacherId ? "border-terra/30 bg-terra-light/40" : "border-cream-border bg-white"}`}>
+                <div>
+                  <p className="text-sm font-bold text-ink">Use substitute teacher</p>
+                  <p className="mt-1 text-xs text-ink-light">
+                    Promote the substitute visually while retaining the original teacher as secondary context.
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={teacherAssignment.substituteEnabled}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setTeacherAssignment((current) => ({
+                      ...current,
+                      substituteEnabled: checked,
+                      substituteTeacherId: checked ? current.substituteTeacherId : "",
+                    }));
+                  }}
+                  disabled={!teacherAssignment.originalTeacherId || teacherSaving}
+                  className="mt-1 h-4 w-4 rounded border-cream-border text-terra focus:ring-terra"
+                />
+              </label>
+
+              {teacherAssignment.substituteEnabled && (
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-widest text-ink-light">Substitute Teacher</label>
+                  <select
+                    value={teacherAssignment.substituteTeacherId}
+                    onChange={(event) => {
+                      setTeacherAssignment((current) => ({ ...current, substituteTeacherId: event.target.value }));
+                    }}
+                    className="input-warm"
+                    disabled={teacherSaving || teachers.length <= 1}
+                  >
+                    <option value="">{teachers.length <= 1 ? "Add another teacher record first" : "Select substitute teacher"}</option>
+                    {teachers.filter((teacher) => teacher.id !== teacherAssignment.originalTeacherId).map((teacher) => (
+                      <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {!teacherAssignment.originalTeacherId && extractedTeacherName && (
+                <div className="rounded-2xl bg-gold-light px-4 py-3 text-sm text-gold-dark">
+                  Extracted teacher metadata is still <strong>{extractedTeacherName}</strong>. It has not been matched to a saved teacher record yet.
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={saveTeacherAssignment}
+                disabled={teacherSaving}
+                className="btn-primary flex-1 py-3 text-sm disabled:opacity-50"
+              >
+                {teacherSaving ? "Saving…" : "Save teacher assignment"}
+              </button>
+              <button
+                onClick={() => setTeacherEditorOpen(false)}
+                disabled={teacherSaving}
+                className="btn-ghost px-5 py-3 text-sm disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {groupModal && (
-        <div className="absolute inset-0 z-50 bg-ink/30 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={e => { if (e.target === e.currentTarget) setGroupModal(false); }}>
-          <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-warm-lg animate-pop-in">
-            <div className="text-4xl mb-4">👥</div>
-            <h3 className="font-display font-black text-xl text-ink mb-2 tracking-tight">Group Check-in</h3>
-            <p className="text-sm text-ink-light leading-relaxed mb-5">
-              Mark all <strong>{unchecked} unchecked</strong> students as Present — perfect for returning from a field trip. You can still uncheck anyone.
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-ink/30 p-4 backdrop-blur-sm"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setGroupModal(false);
+            }
+          }}
+        >
+          <div className="w-full max-w-sm animate-pop-in rounded-3xl bg-white p-8 shadow-warm-lg">
+            <div className="mb-4 text-4xl">👥</div>
+            <h3 className="mb-2 font-display text-xl font-black tracking-tight text-ink">Group Check-in</h3>
+            <p className="mb-5 text-sm leading-relaxed text-ink-light">
+              Mark all <strong>{unchecked} unchecked</strong> students as Present in the local draft before you submit the real attendance.
             </p>
-            <div className="bg-sage-light rounded-2xl px-4 py-3 mb-6 text-sm font-semibold text-sage-dark">
+            <div className="mb-6 rounded-2xl bg-sage-light px-4 py-3 text-sm font-semibold text-sage-dark">
               {unchecked} students will be marked present
             </div>
             <div className="flex gap-3">
@@ -246,32 +1145,94 @@ export default function CheckInPage() {
         </div>
       )}
 
-      {/* Submit confirm */}
-      {submitModal && (
-        <div className="absolute inset-0 z-50 bg-ink/30 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={e => { if (e.target === e.currentTarget) setSubmitModal(false); }}>
-          <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-warm-lg animate-pop-in">
-            <div className="text-4xl mb-4">📋</div>
-            <h3 className="font-display font-black text-xl text-ink mb-2 tracking-tight">Submit this check-in?</h3>
-            <p className="text-sm text-ink-light leading-relaxed mb-5">
-              This finalizes today's attendance and queues automated notifications.
-            </p>
-            <div className="grid grid-cols-2 gap-3 mb-5">
-              <div className="bg-sage-light rounded-2xl p-4 text-center">
-                <p className="text-2xl font-black text-sage-dark">{present}</p>
-                <p className="text-xs text-sage-dark mt-1">present</p>
+      {addStudentOpen && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-ink/30 p-4 backdrop-blur-sm"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !addingStudent) {
+              setAddStudentOpen(false);
+            }
+          }}
+        >
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-warm-lg">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-display text-xl font-black tracking-tight text-ink">Add student to this list</h3>
+                <p className="mt-1 text-sm text-ink-light">
+                  Save a student directly onto this real list. Duplicate full names are blocked, and later uploads will only auto-merge matching names when the evidence agrees.
+                </p>
+                {sessionSubmitted && (
+                  <p className="mt-2 text-xs font-medium text-gold">
+                    This session is already submitted. A newly added student will appear on the list for future check-ins but will not change the submitted attendance.
+                  </p>
+                )}
               </div>
-              <div className="bg-gold-light rounded-2xl p-4 text-center">
-                <p className="text-2xl font-black text-gold">{absent}</p>
-                <p className="text-xs text-gold mt-1">absent</p>
+              <button
+                onClick={() => !addingStudent && setAddStudentOpen(false)}
+                className="rounded-xl bg-cream-deep px-3 py-1.5 text-xs font-bold text-ink-light"
+              >
+                Close
+              </button>
+            </div>
+
+            {addStudentError && (
+              <div className="mb-4 rounded-2xl bg-blush-light px-4 py-3 text-xs font-medium text-blush">
+                {addStudentError}
               </div>
+            )}
+
+            <div className="grid gap-4 md:grid-cols-2">
+              {([
+                ["name", "Display Name"],
+                ["firstName", "First Name"],
+                ["lastName", "Last Name"],
+                ["childSheetNumber", "Sheet #"],
+                ["guardianName", "Guardian Name"],
+                ["guardianPhone", "Guardian Phone"],
+                ["guardianEmail", "Guardian Email"],
+                ["shortCode", "Short Code"],
+                ["pickupDropLocation", "Pickup / Drop-off"],
+                ["allergies", "Allergies"],
+                ["specialNeeds", "Special Needs"],
+              ] as Array<[keyof AddStudentForm, string]>).map(([field, label]) => (
+                <label key={field} className={`block ${field === "specialNeeds" ? "md:col-span-2" : ""}`}>
+                  <span className="mb-2 block text-xs font-bold uppercase tracking-widest text-ink-light">{label}</span>
+                  {field === "specialNeeds" ? (
+                    <textarea
+                      value={addStudentForm[field]}
+                      onChange={(event) => setAddStudentForm((current) => ({ ...current, [field]: event.target.value }))}
+                      rows={3}
+                      className="input-warm min-h-[104px]"
+                    />
+                  ) : (
+                    <input
+                      value={addStudentForm[field]}
+                      onChange={(event) => setAddStudentForm((current) => ({ ...current, [field]: event.target.value }))}
+                      className="input-warm"
+                    />
+                  )}
+                </label>
+              ))}
             </div>
-            <div className="bg-terra-light rounded-2xl px-4 py-3 mb-6 text-xs font-medium text-terra-dark">
-              📲 {absent} absence + {present} arrival notifications will be queued (Pro plan)
-            </div>
-            <div className="flex gap-3">
-              <button onClick={doSubmit} className="btn-sage flex-1 py-3 text-sm">Confirm &amp; Submit</button>
-              <button onClick={() => setSubmitModal(false)} className="btn-ghost px-5 py-3 text-sm">Back</button>
+
+            <div className="mt-5 flex items-center justify-end gap-3">
+              <button
+                onClick={() => {
+                  if (!addingStudent) {
+                    setAddStudentOpen(false);
+                  }
+                }}
+                className="btn-ghost px-5 py-3 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitNewStudent}
+                disabled={addingStudent}
+                className="btn-primary px-5 py-3 text-sm disabled:opacity-50"
+              >
+                {addingStudent ? "Saving…" : "Save student"}
+              </button>
             </div>
           </div>
         </div>

@@ -118,37 +118,31 @@ export default async function DashboardPage() {
         ))}
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        {[
-          { label: "Active Lists", value: String(listCount ?? 0), icon: "📋", color: "text-ink" },
-          { label: "Students Today", value: "41", icon: "👥", color: "text-sage-dark" },
-          { label: "Absent Today", value: "7", icon: "⚠️", color: "text-blush" },
-          { label: "Sessions This Month", value: "23", icon: "📅", color: "text-terra" },
-        ].map(s => (
-          <div key={s.label} className="card p-5">
-            <div className="text-2xl mb-2">{s.icon}</div>
-            <p className={`text-3xl font-black tracking-tight ${s.color}`}>{s.value}</p>
-            <p className="text-xs text-ink-light mt-1">{s.label}</p>
-          </div>
-        ))}
+      {/* Live summary */}
+      <div className="grid gap-4 mb-8 md:grid-cols-[minmax(0,220px)_1fr]">
+        <div className="card p-5">
+          <div className="text-2xl mb-2">📋</div>
+          <p className="text-3xl font-black tracking-tight text-ink">{listCount ?? 0}</p>
+          <p className="text-xs text-ink-light mt-1">Active Lists</p>
+        </div>
+
+        <div className="card p-5">
+          <p className="text-xs font-bold uppercase tracking-widest text-ink-light">Live dashboard metrics</p>
+          <p className="mt-3 text-sm font-semibold text-ink">Attendance totals and recent activity are not connected to real org data on this screen yet.</p>
+          <p className="mt-2 text-sm text-ink-light">
+            This dashboard intentionally hides placeholder counts and activity instead of showing fabricated signed-in data.
+          </p>
+        </div>
       </div>
 
       {/* Recent activity */}
       <div>
         <p className="text-xs font-bold uppercase tracking-widest text-ink-light mb-3">Recent Activity</p>
-        <div className="card overflow-hidden">
-          {[
-            { icon: "📲", msg: "SMS sent to 5 guardians — absent students notified", time: "8:47 AM", bg: "bg-gold-light" },
-            { icon: "✅", msg: "3rd Grade Room 12 — check-in submitted (10/12 present)", time: "8:45 AM", bg: "bg-sage-light" },
-            { icon: "📸", msg: "New list 'Spring Science Camp' created from photo", time: "Yesterday", bg: "bg-sky-light" },
-          ].map((a, i) => (
-            <div key={i} className={`flex items-center gap-4 px-5 py-4 ${i < 2 ? "border-b border-cream-border" : ""}`}>
-              <div className={`w-9 h-9 rounded-xl ${a.bg} flex items-center justify-center text-base flex-shrink-0`}>{a.icon}</div>
-              <p className="flex-1 text-sm text-ink-mid">{a.msg}</p>
-              <span className="text-xs text-ink-light flex-shrink-0">{a.time}</span>
-            </div>
-          ))}
+        <div className="card p-5">
+          <p className="text-sm font-semibold text-ink">No live activity feed is available here yet.</p>
+          <p className="mt-2 text-sm text-ink-light">
+            Once this view is backed by real events, recent check-ins and notifications can appear here. For now, no demo activity is shown.
+          </p>
         </div>
       </div>
     </div>

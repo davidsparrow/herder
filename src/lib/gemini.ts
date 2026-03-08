@@ -7,9 +7,24 @@ import {
   HarmBlockThreshold,
   HarmCategory,
 } from "@google/generative-ai";
-import type { GeminiExtractResult } from "@/lib/types";
+import type {
+  DetectedColumn,
+  GeminiExtractResult,
+  GeminiManualReviewState,
+  GeminiMetadataSuggestion,
+  GeminiOverflowBlock,
+  GeminiPrimaryBlock,
+  GeminiRosterMetadata,
+  GeminiRosterRow,
+} from "./types";
 
-const GEMINI_MULTIMODAL_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GEMINI_MODEL_ID = "gemini-2.5-flash";
+
+export type GeminiImageMimeType = "image/jpeg" | "image/png" | "image/webp" | "application/pdf";
+
+export type GeminiModelOptions = {
+  modelId?: string;
+};
 
 type GeminiOperation = "extract-image" | "extract-text";
 
@@ -66,12 +81,15 @@ class GeminiDiagnosticError extends Error {
 }
 
 function getGeminiConfigDiagnostics(apiKey: string | undefined) {
+  const selectedModelId = DEFAULT_GEMINI_MODEL_ID;
   const rawApiKey = apiKey ?? "";
   const trimmedApiKey = rawApiKey.trim();
   const hasApiKey = trimmedApiKey.length > 0;
 
   return {
-    model: GEMINI_MULTIMODAL_MODEL,
+    model: selectedModelId,
+    defaultModel: DEFAULT_GEMINI_MODEL_ID,
+    modelOverrideActive: false,
     hasApiKey,
     apiKeyTrimmedForUse: rawApiKey !== trimmedApiKey,
     apiKeyLength: hasApiKey ? trimmedApiKey.length : null,
@@ -89,10 +107,20 @@ function getGeminiConfigDiagnostics(apiKey: string | undefined) {
   };
 }
 
-function getGeminiClient(operation: GeminiOperation, input: GeminiInputSummary) {
+function normalizeGeminiModelId(modelId?: string) {
+  const trimmedModelId = modelId?.trim();
+  return trimmedModelId || DEFAULT_GEMINI_MODEL_ID;
+}
+
+function getGeminiClient(operation: GeminiOperation, input: GeminiInputSummary, modelId?: string) {
   const rawApiKey = process.env.GEMINI_API_KEY;
   const trimmedApiKey = rawApiKey?.trim() ?? "";
-  const config = getGeminiConfigDiagnostics(rawApiKey);
+  const selectedModelId = normalizeGeminiModelId(modelId);
+  const config = {
+    ...getGeminiConfigDiagnostics(rawApiKey),
+    model: selectedModelId,
+    modelOverrideActive: selectedModelId !== DEFAULT_GEMINI_MODEL_ID,
+  };
 
   console.log("[upload] gemini init:", {
     operation,
@@ -289,12 +317,14 @@ async function runGeminiRequest<T>(
   input: GeminiInputSummary,
   run: (model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>) => Promise<T>,
   options?: {
+    modelId?: string;
     safetySettings?: Array<{ category: HarmCategory; threshold: HarmBlockThreshold }>;
   }
 ) {
-  const { client, config } = getGeminiClient(operation, input);
+  const selectedModelId = normalizeGeminiModelId(options?.modelId);
+  const { client, config } = getGeminiClient(operation, input, selectedModelId);
   const model = client.getGenerativeModel({
-    model: GEMINI_MULTIMODAL_MODEL,
+    model: selectedModelId,
     generationConfig: {
       responseMimeType: "application/json",
     },
@@ -321,6 +351,449 @@ export function getGeminiErrorDiagnostics(error: unknown): GeminiErrorDiagnostic
   return error instanceof GeminiDiagnosticError ? error.diagnostics : null;
 }
 
+const EMPTY_ROSTER_METADATA: GeminiRosterMetadata = {
+  class_list_title: "",
+  start_time: "",
+  stop_time: "",
+  room_location: "",
+  teacher_name: "",
+};
+
+const ALLERGY_TERMS = [
+  "allerg",
+  "peanut",
+  "tree nut",
+  "nut",
+  "cashew",
+  "pistachio",
+  "milk",
+  "dairy",
+  "egg",
+  "soy",
+  "sesame",
+  "gluten",
+  "shellfish",
+] as const;
+
+const SUPPORT_TERMS = [
+  "asthma",
+  "inhaler",
+  "glasses",
+  "wears",
+  "wheelchair",
+  "needs",
+  "support",
+  "epi pen",
+  "epipen",
+  "autism",
+  "adhd",
+  "speech",
+  "mobility",
+  "behavior",
+  "medical",
+] as const;
+
+const DERIVED_COLUMN_DEFINITIONS: Array<{
+  key: keyof GeminiRosterRow;
+  header: string;
+  suggested_mapping: string;
+  confidence: number;
+}> = [
+  { key: "child_display_name", header: "Name", suggested_mapping: "Name", confidence: 99 },
+  { key: "child_sheet_number", header: "Sheet #", suggested_mapping: "(Ignore)", confidence: 80 },
+  { key: "guardian_full_name", header: "Guardian", suggested_mapping: "(Ignore)", confidence: 78 },
+  { key: "guardian_phone", header: "Guardian Phone", suggested_mapping: "Guardian Phone", confidence: 92 },
+  { key: "guardian_email", header: "Guardian Email", suggested_mapping: "Guardian Email", confidence: 92 },
+  { key: "short_code", header: "Short Code", suggested_mapping: "(Ignore)", confidence: 84 },
+  { key: "pickup_drop_location", header: "Pickup/Drop", suggested_mapping: "(Ignore)", confidence: 74 },
+  { key: "allergies", header: "Allergies", suggested_mapping: "Allergies", confidence: 90 },
+  { key: "special_needs", header: "Special Needs", suggested_mapping: "Special Needs", confidence: 88 },
+];
+
+function normalizeString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+    : [];
+}
+
+function normalizeConfidence(value: unknown) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function padValues(values: string[], length: number) {
+  return Array.from({ length }, (_, index) => values[index] ?? "");
+}
+
+function normalizeDisplayName(value: string) {
+  const cleaned = value
+    .replace(/^\s*\d+[.)\-:\s]*/, "")
+    .replace(/^\s*[-*•]+\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned.includes(",")) {
+    return cleaned;
+  }
+
+  const [lastName, ...rest] = cleaned.split(",");
+  const trailing = rest.join(" ").trim();
+  return trailing ? `${trailing} ${lastName.trim()}`.replace(/\s+/g, " ").trim() : cleaned;
+}
+
+function splitNameParts(value: string) {
+  const displayName = normalizeDisplayName(value);
+  if (!displayName) {
+    return { displayName: "", firstName: "", lastName: "" };
+  }
+
+  const parts = displayName.split(/\s+/).filter(Boolean);
+  return {
+    displayName,
+    firstName: parts[0] ?? "",
+    lastName: parts.length > 1 ? parts.slice(1).join(" ") : "",
+  };
+}
+
+function includesAny(text: string, terms: readonly string[]) {
+  return terms.some((term) => text.includes(term));
+}
+
+function classifySupportText(value: string) {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return { allergies: "", specialNeeds: "" };
+  }
+
+  const segments = normalized
+    .split(/[;,/]+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  const allergySegments: string[] = [];
+  const supportSegments: string[] = [];
+  const ambiguousSegments: string[] = [];
+
+  for (const segment of segments) {
+    const lower = segment.toLowerCase();
+    const isAllergy = includesAny(lower, ALLERGY_TERMS);
+    const isSupport = includesAny(lower, SUPPORT_TERMS);
+
+    if (isAllergy && !isSupport) {
+      allergySegments.push(segment);
+      continue;
+    }
+
+    if (isSupport && !isAllergy) {
+      supportSegments.push(segment);
+      continue;
+    }
+
+    if (isAllergy || isSupport) {
+      ambiguousSegments.push(segment);
+      continue;
+    }
+
+    ambiguousSegments.push(segment);
+  }
+
+  if (allergySegments.length && supportSegments.length && ambiguousSegments.length === 0) {
+    return {
+      allergies: allergySegments.join(", "),
+      specialNeeds: supportSegments.join(", "),
+    };
+  }
+
+  if (allergySegments.length && !supportSegments.length && ambiguousSegments.length === 0) {
+    return { allergies: normalized, specialNeeds: "" };
+  }
+
+  if (supportSegments.length && !allergySegments.length && ambiguousSegments.length === 0) {
+    return { allergies: "", specialNeeds: normalized };
+  }
+
+  const lower = normalized.toLowerCase();
+  if (includesAny(lower, ALLERGY_TERMS) && !includesAny(lower, SUPPORT_TERMS)) {
+    return { allergies: normalized, specialNeeds: "" };
+  }
+
+  return { allergies: "", specialNeeds: normalized };
+}
+
+function normalizeDetectedColumns(value: unknown, rowCount: number): DetectedColumn[] {
+  return Array.isArray(value)
+    ? value
+      .filter((column): column is Record<string, unknown> => Boolean(column && typeof column === "object"))
+      .map((column) => {
+        const normalizedValues = normalizeStringArray(column.values);
+        return {
+          header: normalizeString(column.header),
+          sample_values: normalizeStringArray(column.sample_values),
+          suggested_mapping: normalizeString(column.suggested_mapping) || "(Ignore)",
+          confidence: normalizeConfidence(column.confidence),
+          values: rowCount > 0 ? padValues(normalizedValues, rowCount) : normalizedValues,
+        } satisfies DetectedColumn;
+      })
+      .filter((column) => column.header)
+    : [];
+}
+
+function normalizeRosterMetadata(value: unknown): GeminiRosterMetadata {
+  if (!value || typeof value !== "object") {
+    return { ...EMPTY_ROSTER_METADATA };
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    class_list_title: normalizeString(record.class_list_title),
+    start_time: normalizeString(record.start_time),
+    stop_time: normalizeString(record.stop_time),
+    room_location: normalizeString(record.room_location),
+    teacher_name: normalizeString(record.teacher_name),
+  };
+}
+
+function normalizeMetadataSuggestions(value: unknown) {
+  return Array.isArray(value)
+    ? value
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry && typeof entry === "object"))
+      .map((entry) => {
+        const record = entry as Record<string, unknown>;
+        const field = normalizeString(record.field) as GeminiMetadataSuggestion["field"];
+        return {
+          field,
+          value: normalizeString(record.value),
+          confidence: normalizeConfidence(record.confidence),
+          reason: normalizeString(record.reason),
+        } satisfies GeminiMetadataSuggestion;
+      })
+      .filter((entry) => entry.field && entry.value)
+    : [];
+}
+
+function normalizeOverflowBlocks(value: unknown) {
+  return Array.isArray(value)
+    ? value
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry && typeof entry === "object"))
+      .map((entry) => {
+        const record = entry as Record<string, unknown>;
+        const kind = normalizeString(record.kind) as GeminiOverflowBlock["kind"];
+        return {
+          label: normalizeString(record.label),
+          kind: kind || "other",
+          raw_text: normalizeString(record.raw_text),
+        } satisfies GeminiOverflowBlock;
+      })
+      .filter((entry) => entry.label || entry.raw_text)
+    : [];
+}
+
+function normalizeManualReview(value: unknown): GeminiManualReviewState | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const required = Boolean(record.required);
+  const reason = normalizeString(record.reason);
+  const candidate_block_labels = normalizeStringArray(record.candidate_block_labels);
+  if (!required && !reason && candidate_block_labels.length === 0) {
+    return undefined;
+  }
+
+  return {
+    required,
+    reason,
+    candidate_block_labels,
+  };
+}
+
+function normalizeRosterRow(value: unknown): GeminiRosterRow | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const nameParts = splitNameParts(
+    normalizeString(record.child_display_name)
+    || normalizeString(record.child_full_name)
+    || normalizeString(record.name)
+  );
+  if (!nameParts.displayName) {
+    return null;
+  }
+
+  const explicitAllergies = normalizeString(record.allergies);
+  const explicitSpecialNeeds = normalizeString(record.special_needs);
+  const classifiedSpecialNeeds = explicitSpecialNeeds && !explicitAllergies
+    ? classifySupportText(explicitSpecialNeeds)
+    : { allergies: "", specialNeeds: explicitSpecialNeeds };
+
+  return {
+    child_display_name: nameParts.displayName,
+    child_first_name: normalizeString(record.child_first_name) || nameParts.firstName,
+    child_last_name: normalizeString(record.child_last_name) || nameParts.lastName,
+    child_sheet_number: normalizeString(record.child_sheet_number),
+    guardian_full_name: normalizeDisplayName(normalizeString(record.guardian_full_name)),
+    guardian_phone: normalizeString(record.guardian_phone),
+    guardian_email: normalizeString(record.guardian_email),
+    short_code: normalizeString(record.short_code),
+    pickup_drop_location: normalizeString(record.pickup_drop_location),
+    allergies: explicitAllergies || classifiedSpecialNeeds.allergies,
+    special_needs: explicitSpecialNeeds
+      ? classifiedSpecialNeeds.specialNeeds
+      : "",
+    raw_row_text: normalizeString(record.raw_row_text),
+  };
+}
+
+function normalizePrimaryBlock(value: unknown): GeminiPrimaryBlock | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const status = normalizeString(record.status) === "manual_review" ? "manual_review" : "selected";
+  const rows = Array.isArray(record.rows)
+    ? record.rows.map((row) => normalizeRosterRow(row)).filter((row): row is GeminiRosterRow => Boolean(row))
+    : [];
+
+  return {
+    status,
+    selection_reason: normalizeString(record.selection_reason),
+    rows: status === "manual_review" ? [] : rows,
+    metadata: normalizeRosterMetadata(record.metadata),
+    raw_text: normalizeString(record.raw_text),
+  };
+}
+
+function filterMetadataSuggestions(suggestions: GeminiMetadataSuggestion[], metadata: GeminiRosterMetadata) {
+  return suggestions.filter((suggestion) => {
+    const metadataValue = metadata[suggestion.field];
+    return !metadataValue || metadataValue !== suggestion.value;
+  });
+}
+
+function mergeNoteIntoRow(row: GeminiRosterRow, value: string) {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return;
+  }
+
+  const classified = classifySupportText(normalized);
+  if (!row.allergies && classified.allergies) {
+    row.allergies = classified.allergies;
+  }
+
+  if (!row.special_needs) {
+    row.special_needs = classified.specialNeeds || (!classified.allergies ? normalized : "");
+  }
+}
+
+function hydrateRowsFromLegacy(names: string[], detectedColumns: DetectedColumn[]) {
+  const rows = names.map((name) => {
+    const nameParts = splitNameParts(name);
+    return {
+      child_display_name: nameParts.displayName,
+      child_first_name: nameParts.firstName,
+      child_last_name: nameParts.lastName,
+      child_sheet_number: "",
+      guardian_full_name: "",
+      guardian_phone: "",
+      guardian_email: "",
+      short_code: "",
+      pickup_drop_location: "",
+      allergies: "",
+      special_needs: "",
+      raw_row_text: "",
+    } satisfies GeminiRosterRow;
+  });
+
+  detectedColumns.forEach((column) => {
+    const header = column.header.toLowerCase();
+    const values = padValues(normalizeStringArray(column.values), rows.length);
+
+    values.forEach((value, index) => {
+      const row = rows[index];
+      if (!row || !value) {
+        return;
+      }
+
+      if (column.suggested_mapping === "Guardian Phone") {
+        row.guardian_phone ||= value;
+        return;
+      }
+
+      if (column.suggested_mapping === "Guardian Email") {
+        row.guardian_email ||= value;
+        return;
+      }
+
+      if (column.suggested_mapping === "Allergies") {
+        row.allergies ||= value;
+        return;
+      }
+
+      if (column.suggested_mapping === "Special Needs" || column.suggested_mapping === "Notes") {
+        mergeNoteIntoRow(row, value);
+        return;
+      }
+
+      if ((header.includes("code") || header.includes("tag")) && !row.short_code) {
+        row.short_code = value;
+        return;
+      }
+
+      if ((header.includes("guardian") || header.includes("parent") || header.includes("contact")) && !row.guardian_full_name) {
+        row.guardian_full_name = normalizeDisplayName(value);
+        return;
+      }
+
+      if ((header.includes("pickup") || header.includes("drop") || header.includes("location")) && !row.pickup_drop_location) {
+        row.pickup_drop_location = value;
+        return;
+      }
+
+      if ((header.includes("sheet") || header === "#" || header.includes("number")) && !row.child_sheet_number) {
+        row.child_sheet_number = value;
+      }
+    });
+  });
+
+  return rows;
+}
+
+function buildDetectedColumnsFromRows(rows: GeminiRosterRow[], fallbackColumns: DetectedColumn[]): DetectedColumn[] {
+  const derivedColumns: DetectedColumn[] = [];
+
+  DERIVED_COLUMN_DEFINITIONS.forEach(({ key, header, suggested_mapping, confidence }) => {
+    const values = rows.map((row) => normalizeString(row[key]));
+    if (header !== "Name" && values.every((value) => !value)) {
+      return;
+    }
+
+    derivedColumns.push({
+      header,
+      sample_values: values.filter(Boolean).slice(0, 3),
+      suggested_mapping,
+      confidence,
+      values,
+    });
+  });
+
+  return derivedColumns;
+}
+
 function parseGeminiJson(rawText: string): GeminiExtractResult {
   const cleaned = rawText
     .replace(/^```json\s*/i, "")
@@ -330,12 +803,77 @@ function parseGeminiJson(rawText: string): GeminiExtractResult {
 
   try {
     const parsed = JSON.parse(cleaned) as GeminiExtractResult;
+    const legacyNames = normalizeStringArray(parsed.names).map((name) => splitNameParts(name).displayName).filter(Boolean);
+    const raw_text = normalizeString(parsed.raw_text);
+    let detected_columns = normalizeDetectedColumns(parsed.detected_columns, legacyNames.length);
+    let primary_block = normalizePrimaryBlock(parsed.primary_block);
+    let metadata_suggestions = normalizeMetadataSuggestions(parsed.metadata_suggestions);
+    const overflow_blocks = normalizeOverflowBlocks(parsed.overflow_blocks);
+    const manual_review = normalizeManualReview(parsed.manual_review);
 
-    if (!Array.isArray(parsed.names)) parsed.names = [];
-    if (!Array.isArray(parsed.detected_columns)) parsed.detected_columns = [];
-    if (!parsed.raw_text) parsed.raw_text = "";
+    if (!primary_block && legacyNames.length > 0) {
+      primary_block = {
+        status: "selected",
+        selection_reason: "Legacy extraction result without explicit primary-block shaping.",
+        rows: hydrateRowsFromLegacy(legacyNames, detected_columns),
+        metadata: { ...EMPTY_ROSTER_METADATA },
+        raw_text,
+      };
+    }
 
-    return parsed;
+    if (primary_block && primary_block.status !== "manual_review" && primary_block.rows.length === 0 && legacyNames.length > 0) {
+      primary_block.rows = hydrateRowsFromLegacy(legacyNames, detected_columns);
+    }
+
+    if (primary_block) {
+      metadata_suggestions = filterMetadataSuggestions(metadata_suggestions, primary_block.metadata);
+    }
+
+    const manualReviewRequired = manual_review?.required || primary_block?.status === "manual_review";
+    if (manualReviewRequired) {
+      const reason = manual_review?.reason || primary_block?.selection_reason || "Two candidate roster blocks remained equally strong after scoring.";
+      return {
+        names: [],
+        detected_columns: [],
+        raw_text,
+        primary_block: {
+          status: "manual_review",
+          selection_reason: reason,
+          rows: [],
+          metadata: primary_block?.metadata ?? { ...EMPTY_ROSTER_METADATA },
+          raw_text: primary_block?.raw_text ?? "",
+        },
+        metadata_suggestions,
+        overflow_blocks,
+        manual_review: {
+          required: true,
+          reason,
+          candidate_block_labels: manual_review?.candidate_block_labels ?? [],
+        },
+      };
+    }
+
+    const rows = primary_block?.rows ?? [];
+    const names = rows.length > 0 ? rows.map((row) => row.child_display_name).filter(Boolean) : legacyNames;
+    detected_columns = rows.length > 0
+      ? buildDetectedColumnsFromRows(rows, normalizeDetectedColumns(parsed.detected_columns, rows.length))
+      : detected_columns;
+
+    return {
+      names,
+      detected_columns,
+      raw_text,
+      ...(primary_block ? {
+        primary_block: {
+          ...primary_block,
+          rows,
+          raw_text: primary_block.raw_text || raw_text,
+        },
+      } : {}),
+      ...(metadata_suggestions.length > 0 ? { metadata_suggestions } : {}),
+      ...(overflow_blocks.length > 0 ? { overflow_blocks } : {}),
+      ...(manual_review ? { manual_review } : {}),
+    };
   } catch {
     throw new Error(`Gemini returned non-JSON response: ${rawText.slice(0, 200)}`);
   }
@@ -344,34 +882,90 @@ function parseGeminiJson(rawText: string): GeminiExtractResult {
 const EXTRACT_PROMPT = `
 You are a data extraction assistant for a class/event check-in app.
 
-Analyze this image (which may be a photo of a paper roster, a printed list, a spreadsheet screenshot, or a computer screen) and extract ALL student or participant names plus any accompanying columns of data.
+Analyze this image (which may be a photo of a paper roster, a printed list, a spreadsheet screenshot, or a computer screen) and extract ONE primary roster block only.
 
 Return ONLY valid JSON in this exact shape — no markdown fences, no explanation:
 {
-  "names": ["Full Name 1", "Full Name 2", ...],
+  "names": ["Full Name 1", "Full Name 2"],
   "detected_columns": [
     {
       "header": "column header as it appears",
       "sample_values": ["val1", "val2", "val3"],
-      "suggested_mapping": "one of: Name | Guardian Phone | Age | Allergies | Pickup Location | Drop-off Location | Special Needs | Notes | (Ignore)",
-      "confidence": 0-100
+      "suggested_mapping": "one of: Name | Guardian Phone | Guardian Email | Age (calculate) | Allergies | Pickup Location | Drop-off Location | Special Needs | Notes | (Ignore)",
+      "confidence": 0,
+      "values": ["row1 value", "row2 value"]
     }
   ],
+  "primary_block": {
+    "status": "selected",
+    "selection_reason": "why this block won or why manual review is required",
+    "rows": [
+      {
+        "child_display_name": "",
+        "child_first_name": "",
+        "child_last_name": "",
+        "child_sheet_number": "",
+        "guardian_full_name": "",
+        "guardian_phone": "",
+        "guardian_email": "",
+        "short_code": "",
+        "pickup_drop_location": "",
+        "allergies": "",
+        "special_needs": "",
+        "raw_row_text": ""
+      }
+    ],
+    "metadata": {
+      "class_list_title": "",
+      "start_time": "",
+      "stop_time": "",
+      "room_location": "",
+      "teacher_name": ""
+    },
+    "raw_text": "verbatim text for the chosen primary block only"
+  },
+  "metadata_suggestions": [
+    {
+      "field": "class_list_title",
+      "value": "",
+      "confidence": 0,
+      "reason": ""
+    }
+  ],
+  "overflow_blocks": [
+    {
+      "label": "secondary heading or note area",
+      "kind": "secondary_roster",
+      "raw_text": "verbatim non-primary text"
+    }
+  ],
+  "manual_review": {
+    "required": false,
+    "reason": "",
+    "candidate_block_labels": []
+  },
   "raw_text": "all text you can read from the image, verbatim"
 }
 
 Rules:
-- Always include a "Name" column in detected_columns (confidence 99).
-- Extract every visible column, not just names.
-- If the list is numbered, strip the number from the name.
-- Normalize names to "First Last" format where possible.
-- Keep suggested_mapping simple — pick the closest match from the allowed values.
-- confidence is your certainty 0-100 that the suggested_mapping is correct.
+- Extract ONE primary roster block only. Never merge two roster/class sections into one row set.
+- If two candidate roster blocks remain equally strong after scoring, do not auto-pick. Set primary_block.status to manual_review, set manual_review.required to true, explain the tie, leave names, detected_columns, and primary_block.rows empty, and preserve both candidates in overflow_blocks/raw_text.
+- Candidate block scoring should strongly use spreadsheet-like cues: repeated cell alignment, box/grid structure, commas, repeated spaces, tab-like gaps, repeating separators, and narrow repeated short-code columns.
+- Treat isolated short tokens in a repeated narrow column as likely short codes when the pattern is strong enough. Preserve the exact visible token such as B or orange B.
+- names must exactly equal the selected primary block row names in display order. If the list is numbered, strip the number from the child name.
+- Normalize child names to First Last display order where possible, and split first/last only when reliable.
+- Keep every detected_columns values array aligned only to the selected primary block rows. Never include secondary-block rows there.
+- Use overflow_blocks for secondary roster sections, legends, footer notes, unmatched side notes, or text that cannot be aligned safely to the primary rows.
+- Split allergies from special-needs text only when clearly separable. If mixed text cannot be separated safely, keep it honestly in special_needs and leave allergies blank.
+- Preserve ambiguous values honestly. Do not fabricate guardian info, room/time/teacher metadata, pickup/drop semantics, or short-code details.
+- Put only obvious primary-block header metadata into primary_block.metadata. Put ambiguous/manual-apply candidates into metadata_suggestions instead.
+- Always include a Name detected column when a primary block is selected.
 `.trim();
 
 export async function extractListFromImage(
   base64Image: string,
-  mimeType: "image/jpeg" | "image/png" | "image/webp" | "application/pdf"
+  mimeType: GeminiImageMimeType,
+  options?: GeminiModelOptions
 ): Promise<GeminiExtractResult> {
   const result = await runGeminiRequest(
     "extract-image",
@@ -387,6 +981,7 @@ export async function extractListFromImage(
         { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
         { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
       ],
+      modelId: options?.modelId,
     }
   );
 
@@ -396,15 +991,38 @@ export async function extractListFromImage(
 /**
  * For plain text/CSV input — no vision model needed, just parse structure.
  */
-export async function extractListFromText(text: string): Promise<GeminiExtractResult> {
+export async function extractListFromText(text: string, options?: GeminiModelOptions): Promise<GeminiExtractResult> {
   const prompt = `
-Parse this plain text roster and return JSON in this exact shape with no markdown fences:
+Parse this plain text roster and return JSON in the same shape and with the same rules as the image extractor.
+
+Focus on ONE primary roster block only, preserve secondary/ambiguous material in overflow, and surface manual review instead of auto-picking on an equal-strength block tie.
+
+Return valid JSON with these top-level keys:
 {
-  "names": ["Full Name 1", ...],
+  "names": [...],
   "detected_columns": [...],
+  "primary_block": {
+    "status": "selected",
+    "selection_reason": "",
+    "rows": [...],
+    "metadata": {
+      "class_list_title": "",
+      "start_time": "",
+      "stop_time": "",
+      "room_location": "",
+      "teacher_name": ""
+    },
+    "raw_text": ""
+  },
+  "metadata_suggestions": [...],
+  "overflow_blocks": [...],
+  "manual_review": {
+    "required": false,
+    "reason": "",
+    "candidate_block_labels": []
+  },
   "raw_text": "${text.slice(0, 2000)}"
 }
-Same rules as before — extract names and any column data you can identify.
 
 Text to parse:
 ${text}
@@ -413,7 +1031,8 @@ ${text}
   const result = await runGeminiRequest(
     "extract-text",
     { textLength: text.length },
-    (model) => model.generateContent(prompt)
+    (model) => model.generateContent(prompt),
+    { modelId: options?.modelId }
   );
 
   try {

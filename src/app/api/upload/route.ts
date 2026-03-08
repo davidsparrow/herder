@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { extractListFromImage, extractListFromText, getGeminiErrorDiagnostics } from "@/lib/gemini";
-import { canCreateList } from "@/lib/plans";
+import { FLOW_ID_HEADER, normalizeFlowId } from "@/lib/flow-diagnostics";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // Gemini vision can be slow
@@ -152,10 +153,18 @@ function getSafeUploadErrorMessage(error: unknown, stage: UploadStage | null) {
 
 export async function POST(req: NextRequest) {
   const supabase = createClient();
+  const flowId = normalizeFlowId(req.headers.get(FLOW_ID_HEADER)) ?? randomUUID();
+  const vercelRequestId = req.headers.get("x-vercel-id") ?? null;
 
   // Auth check
   const { data: { user }, error: authError } = await supabase.auth.getUser();
-  console.log("[upload] auth check:", { userId: user?.id, email: user?.email, authError: authError?.message ?? null });
+  console.log("[upload] auth check:", {
+    flowId,
+    vercelRequestId,
+    userId: user?.id,
+    email: user?.email,
+    authError: authError?.message ?? null,
+  });
   if (!user || authError) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   // Fetch profile to get plan + org
@@ -165,35 +174,21 @@ export async function POST(req: NextRequest) {
     .eq("id", user.id)
     .single();
 
-  console.log("[upload] profile query:", { userId: user.id, profile, profileError });
+  console.log("[upload] profile query:", { flowId, userId: user.id, profile, profileError });
   if (profileError) {
-    console.error("[upload] Supabase profile error (full):", JSON.stringify(profileError, null, 2));
+    console.error("[upload] Supabase profile error (full):", { flowId, profileError: JSON.stringify(profileError, null, 2) });
   }
 
   if (!profile) return NextResponse.json({ error: "Profile not found" }, { status: 404 });
 
-  console.log("[upload] profile details:", { org_id: profile.org_id, plan_tier: profile.plan_tier });
-
-  // Plan gate: count existing lists for this org
-  const { count, error: countError } = await supabase
-    .from("checkin_lists")
-    .select("*", { count: "exact", head: true })
-    .eq("org_id", profile.org_id)
-    .eq("archived", false);
-
-  console.log("[upload] checkin_lists count:", { count, countError: countError?.message ?? null });
-
-  const gate = canCreateList(profile.plan_tier, count ?? 0);
-  if (!gate.allowed) {
-    return NextResponse.json({ error: gate.reason, code: "PLAN_LIMIT" }, { status: 402 });
-  }
+  console.log("[upload] profile details:", { flowId, org_id: profile.org_id, plan_tier: profile.plan_tier });
 
   const contentType = req.headers.get("content-type") ?? "";
-  console.log("[upload] request metadata:", { contentType });
+  console.log("[upload] request metadata:", { flowId, vercelRequestId, contentType });
 
   let result;
   let stage: UploadStage | null = null;
-  let uploadContext: Record<string, unknown> = { contentType };
+  let uploadContext: Record<string, unknown> = { flowId, vercelRequestId, contentType };
 
   try {
     if (contentType.includes("multipart/form-data")) {
@@ -282,16 +277,18 @@ export async function POST(req: NextRequest) {
         error: safeMessage,
         code: "UPLOAD_EXTRACTION_FAILED",
         stage,
+        flow_id: flowId,
       },
       { status: 500 },
     );
   }
 
   console.log("[upload] extraction success:", {
+    flowId,
     stage,
     namesCount: result?.names?.length ?? 0,
     detectedColumnsCount: result?.detected_columns?.length ?? 0,
   });
 
-  return NextResponse.json({ success: true, data: result });
+  return NextResponse.json({ success: true, data: result, flow_id: flowId });
 }

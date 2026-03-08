@@ -145,10 +145,25 @@ supabase/
 - Frontend shows upgrade prompts when limits are hit
 
 ### Gemini extraction
-- `src/lib/gemini.ts` sends image as base64 to `gemini-1.5-pro`
-- Returns structured JSON: `{ names[], detected_columns[], raw_text }`
-- Upload page shows detected columns with confidence scores for user to confirm/remap
-- Text/CSV input uses `gemini-1.5-flash` for speed
+- `src/lib/gemini.ts` uses `gemini-2.5-flash` by default and exposes the shared extraction prompt/parser contract.
+- `extractListFromImage()` handles JPG/PNG/WEBP/PDF inputs; `extractListFromText()` handles CSV/TXT inputs.
+- Upload page shows detected columns with confidence scores for user to confirm/remap.
+
+### Gemini comparison harness
+- Run `npm run compare:gemini -- --model gemini-2.5-flash --model <candidate-model> --input /absolute/path/to/file.jpg --repeat 1 --label wave1`.
+- For same-data cross-format comparisons, group files with `caseId::path`, for example: `--input roster-a::/path/IMG_5224.jpeg --input roster-a::/path/roster.csv --input roster-a::/path/roster.txt`.
+- The harness keeps the current prompt/parser seam fixed and varies only `--model` unless the file modality forces a different entrypoint.
+- Results are written to `tmp/gemini-comparison-results/*.json` with per-run latency, model ID, input SHA, entrypoint (`extractListFromImage` vs `extractListFromText`), parsed output, and grouped summary rows.
+- Cross-format comparisons stay honest by recording each run’s modality and entrypoint instead of pretending image/PDF and CSV/TXT used the exact same extraction path.
+
+### Roster header autofill
+- The upload flow now auto-fills obvious extracted header metadata into the new-list form for class/event name, start time, stop time, room/location, and roster teacher name.
+- Ambiguous or conflicting metadata stays visible as manual-apply suggestions in the upload UI instead of being forced silently.
+- Teacher directory assignment remains conservative: Herder only auto-selects an original teacher when the extracted teacher name maps to exactly one directory teacher.
+
+### Header mapping roadmap
+- Admin-facing header-mapping controls were intentionally deferred for this wave.
+- A future wave can add org-level mapping policy controls (for example, confidence thresholds or field-level allow/deny rules) once there is a durable settings model beyond today’s upload-local behavior.
 
 ### Email via Resend
 - All emails sent from `no-reply@bendersaas.ai`
