@@ -29,7 +29,7 @@ export function MagicLinkEmail({ magicLink, email }: Props) {
               </Button>
             </Section>
             <Text className="text-xs text-[#8B6355]">
-              If you didn't request this, you can safely ignore this email. Your account is secure.
+              If you didn’t request this, you can safely ignore this email. Your account is secure.
             </Text>
           </Container>
         </Body>

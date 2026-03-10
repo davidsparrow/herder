@@ -2,7 +2,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
@@ -23,7 +23,7 @@ type Mode = "magic" | "password" | "signup";
 const DEBUG_STORAGE_KEY = "herder_auth_debug";
 
 export default function LoginPage() {
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -98,8 +98,8 @@ export default function LoginPage() {
       );
     };
 
-    loadClientAuthState();
-  }, []);
+    void loadClientAuthState();
+  }, [supabase]);
 
   const sendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();

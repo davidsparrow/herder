@@ -45,7 +45,7 @@ export default function LandingPage() {
           <h1 className="font-display font-black text-5xl md:text-6xl text-ink leading-[1.06] tracking-tighter mb-6">
             The friendliest<br />
             <em className="text-terra not-italic">check-in app</em><br />
-            you'll ever use.
+            you’ll ever use.
           </h1>
           <p className="text-lg text-ink-light leading-relaxed mb-10 max-w-md">
             Snap a photo of any paper roster. Herder turns it into a smart, live check-in list with automated guardian notifications — in under 30 seconds.

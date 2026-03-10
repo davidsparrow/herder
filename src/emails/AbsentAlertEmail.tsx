@@ -31,7 +31,7 @@ export function AbsentAlertEmail({ guardianName, studentName, className, session
               {adminContact ? ` You can reach them at ${adminContact}.` : ""}
             </Text>
             <Text className="text-xs text-[#8B6355] mt-6">
-              You're receiving this because you are listed as a guardian in Herder. To update notification preferences, contact your program administrator.
+              You’re receiving this because you are listed as a guardian in Herder. To update notification preferences, contact your program administrator.
             </Text>
           </Container>
         </Body>
