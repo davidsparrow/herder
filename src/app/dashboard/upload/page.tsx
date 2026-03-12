@@ -913,7 +913,7 @@ export default function UploadPage() {
           </div>
 
           <div className="bg-terra-light border border-terra/30 rounded-2xl px-5 py-3.5 text-sm text-terra-dark mb-6">
-            💡 <strong>Admin tip:</strong> Custom columns you've defined in Admin → Custom Columns will also appear automatically.
+            💡 <strong>Admin tip:</strong> Custom columns you’ve defined in Admin → Custom Columns will also appear automatically.
           </div>
 
           <div className="flex gap-3">

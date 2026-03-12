@@ -26,7 +26,7 @@ export function ArrivalConfirmEmail({ guardianName, studentName, className, sess
               This is a confirmation that <strong>{studentName}</strong> was checked in to <strong>{className}</strong> on {sessionDate}.
             </Text>
             <Text className="text-xs text-[#8B6355] mt-6">
-              You're receiving this because you are listed as a guardian in Herder. To update notification preferences, contact your program administrator.
+              You’re receiving this because you are listed as a guardian in Herder. To update notification preferences, contact your program administrator.
             </Text>
           </Container>
         </Body>

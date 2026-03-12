@@ -105,7 +105,7 @@ export default function OnboardPage() {
       <div className="card p-8 w-full max-w-md animate-float-up">
         <h1 className="font-display font-black text-2xl text-ink tracking-tight mb-2">Welcome to Herder!</h1>
         <p className="text-sm text-ink-light mb-7">
-          You're on the <strong className="text-terra">Free plan</strong> — let's get your account set up in 30 seconds.
+          You’re on the <strong className="text-terra">Free plan</strong> — let’s get your account set up in 30 seconds.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">

@@ -9,7 +9,7 @@ export function WelcomeEmail({ name }: Props) {
   return (
     <Html>
       <Head />
-      <Preview>Welcome to Herder — you're on the Free plan!</Preview>
+      <Preview>Welcome to Herder — you’re on the Free plan!</Preview>
       <Tailwind>
         <Body className="bg-[#FDF8F3] font-sans py-10">
           <Container className="bg-white rounded-2xl max-w-lg mx-auto px-10 py-10 shadow-sm border border-[#EAD9C6]">
@@ -17,7 +17,7 @@ export function WelcomeEmail({ name }: Props) {
               Welcome to Herder, {name || "friend"}! 🐑
             </Heading>
             <Text className="text-[#5C3D2E] text-sm mb-4 leading-relaxed">
-              You're all set on the <strong>Free plan</strong> — you can create up to 3 check-in lists with up to 20 names each. No credit card needed.
+              You’re all set on the <strong>Free plan</strong> — you can create up to 3 check-in lists with up to 20 names each. No credit card needed.
             </Text>
             <Text className="text-[#8B6355] text-sm mb-6 leading-relaxed">
               To get started, upload a photo of your roster or drag in a spreadsheet. Herder will extract every name and have you live in under 30 seconds.

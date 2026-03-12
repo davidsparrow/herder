@@ -26,7 +26,7 @@ export default async function DashboardPage() {
         <div className="max-w-2xl rounded-3xl border border-terra/20 bg-white p-6 shadow-warm">
           <p className="text-xs font-black uppercase tracking-[0.18em] text-terra-dark">Signed in</p>
           <h1 className="mt-2 font-display text-2xl font-black tracking-tight text-ink">
-            We couldn't load your workspace details yet.
+            We couldn’t load your workspace details yet.
           </h1>
           <p className="mt-3 text-sm leading-relaxed text-ink-light">
             Your account is still signed in. Finish onboarding to complete setup, or try again after the profile issue clears.
@@ -94,7 +94,7 @@ export default async function DashboardPage() {
         <div className="bg-blush-light border border-blush/30 rounded-2xl px-5 py-4 mb-6">
           <p className="text-sm font-bold text-blush mb-1">Free plan limit reached</p>
           <p className="text-xs text-blush/80">
-            You've used all 3 list slots on the Free plan. Upgrade to Standard or Pro for unlimited lists.
+            You’ve used all 3 list slots on the Free plan. Upgrade to Standard or Pro for unlimited lists.
           </p>
         </div>
       )}

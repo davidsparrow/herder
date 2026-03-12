@@ -455,7 +455,7 @@ export default function CheckInPage() {
     return () => {
       active = false;
     };
-  }, [listId, sessionId, supabase]);
+  }, [flowId, listId, sessionId, supabase]);
 
   useEffect(() => {
     setTeacherAssignment({
