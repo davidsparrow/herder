@@ -19,54 +19,54 @@ const SHEEP = [
 
 export default function HomePage() {
   return (
-    <div className="home-page h-screen bg-cream font-sans flex flex-col overflow-hidden">
+    <div className="home-page h-[100svh] bg-cream font-sans flex flex-col overflow-hidden">
 
       {/* Nav */}
       <nav className="sticky top-0 z-50 bg-cream/90 backdrop-blur-md border-b border-cream-border">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-5xl mx-auto px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-terra flex items-center justify-center">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-terra flex items-center justify-center">
               <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
                 <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
-            <span className="font-display font-black text-xl text-ink tracking-tight">Herder</span>
+            <span className="font-display font-black text-lg sm:text-xl text-ink tracking-tight">Herder</span>
           </div>
           <div className="hidden md:flex items-center gap-8 text-sm font-semibold text-ink-light">
             <Link href="/about" className="hover:text-ink transition-colors">About</Link>
             <Link href="/about#features" className="hover:text-ink transition-colors">Features</Link>
             <Link href="/about#pricing" className="hover:text-ink transition-colors">Pricing</Link>
           </div>
-          <Link href="/auth/login" className="btn-primary text-sm px-5 py-2.5">
+          <Link href="/auth/login" className="btn-primary text-xs sm:text-sm px-4 sm:px-5 py-2 sm:py-2.5">
             Get started free
           </Link>
         </div>
       </nav>
 
-      {/* Main — graphic + buttons centered, shifted up */}
-      <main className="relative flex-1 flex flex-col items-center justify-center px-6 -mt-10 pb-2">
+      {/* Main — graphic stays large, but layout is packed tighter on mobile */}
+      <main className="relative z-20 flex-1 min-h-0 flex flex-col items-center px-4 pt-1 pb-1 sm:px-6 sm:pt-2">
 
-        {/* Graphic — 30% larger */}
-        <div className="relative z-30 mb-6">
+        {/* Graphic */}
+        <div className="relative z-30 flex w-full flex-1 min-h-0 items-start justify-center -mt-3 sm:-mt-6 mb-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/herder-splash.png"
             alt="Herder"
-            className="w-[21rem] h-[21rem] md:w-[26rem] md:h-[26rem] object-contain drop-shadow-xl"
+            className="w-[21rem] md:w-[26rem] max-w-full h-auto max-h-full object-contain drop-shadow-xl"
           />
         </div>
 
         {/* CTA Buttons */}
-        <div className="relative z-20 flex flex-col sm:flex-row gap-4 w-full max-w-sm">
+        <div className="relative z-20 flex flex-col sm:flex-row gap-3 sm:gap-4 w-full max-w-sm pb-1">
           <Link
             href="/auth/login"
-            className="btn-primary text-center py-4 px-6 text-base flex-1"
+            className="btn-primary text-center py-3.5 sm:py-4 px-6 text-base flex-1"
           >
             Start herding for free
           </Link>
           <Link
             href="/about"
-            className="btn-ghost text-center py-4 px-6 text-base flex-1"
+            className="btn-ghost text-center py-3.5 sm:py-4 px-6 text-base flex-1"
           >
             What is Herder?
           </Link>
@@ -96,7 +96,7 @@ export default function HomePage() {
 
       {/* Footer */}
       <footer
-        className="relative border-t border-cream-border py-5 px-6 text-center text-sm text-ink-light"
+        className="relative border-t border-cream-border py-3 sm:py-5 px-4 sm:px-6 text-center text-xs sm:text-sm text-ink-light"
         style={{ zIndex: 50 }}
       >
         © 2026 herder &nbsp;·&nbsp;
