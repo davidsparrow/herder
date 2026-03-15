@@ -4,6 +4,7 @@ import Link from "next/link";
 import { PLANS } from "@/lib/plans";
 import type { Profile } from "@/lib/types";
 import { getSignedInIdentity } from "@/lib/user-identity";
+import { MobileNav } from "./MobileNav";
 
 const NAV = [
   { href: "/dashboard",         icon: "⊞", label: "Dashboard" },
@@ -42,8 +43,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <div className="flex h-screen overflow-hidden bg-cream font-sans">
-      {/* Sidebar */}
-      <aside className="w-16 bg-white border-r border-cream-border flex flex-col items-center py-4 gap-1 shadow-warm z-10 flex-shrink-0">
+      {/* Sidebar — hidden on mobile, visible md+ */}
+      <aside className="hidden md:flex w-16 bg-white border-r border-cream-border flex-col items-center py-4 gap-1 shadow-warm z-10 flex-shrink-0">
         {/* Logo */}
         <div className="w-9 h-9 rounded-xl bg-terra flex items-center justify-center mb-5">
           <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
@@ -78,8 +79,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
       {/* Main area */}
       <div className="flex flex-col flex-1 overflow-hidden">
         {/* Topbar */}
-        <header className="h-14 bg-white border-b border-cream-border flex items-center justify-between px-6 flex-shrink-0">
+        <header className="h-14 bg-white border-b border-cream-border flex items-center justify-between px-4 md:px-6 flex-shrink-0">
           <div className="flex items-center gap-2">
+            {/* Hamburger + slide-in drawer — mobile only */}
+            <MobileNav
+              planBadge={plan.badge}
+              planName={plan.name}
+              signOutAction={signOut}
+            />
             <span className="badge bg-cream-deep text-ink-light">Spring 2026</span>
             <span className="badge bg-sage-light text-sage-dark">● Live</span>
           </div>
