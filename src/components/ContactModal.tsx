@@ -70,7 +70,7 @@ export default function ContactModal({ open, onClose }: Props) {
               </svg>
             </div>
             <p className="text-green-400 font-black text-2xl mb-2">Success!!</p>
-            <p className="text-white/70 text-sm">We'll be in touch soon.</p>
+            <p className="text-white/70 text-sm">We&apos;ll be in touch soon.</p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="px-7 pb-7 space-y-4">
