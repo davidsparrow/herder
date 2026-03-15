@@ -19,7 +19,7 @@ const SHEEP = [
 
 export default function HomePage() {
   return (
-    <div className="min-h-screen bg-cream font-sans flex flex-col overflow-hidden">
+    <div className="home-page h-screen bg-cream font-sans flex flex-col overflow-hidden">
 
       {/* Nav */}
       <nav className="sticky top-0 z-50 bg-cream/90 backdrop-blur-md border-b border-cream-border">
@@ -43,16 +43,16 @@ export default function HomePage() {
         </div>
       </nav>
 
-      {/* Main — graphic + buttons centered */}
-      <main className="relative flex-1 flex flex-col items-center justify-center px-6 pt-10 pb-32">
+      {/* Main — graphic + buttons centered, shifted up */}
+      <main className="relative flex-1 flex flex-col items-center justify-center px-6 -mt-10 pb-2">
 
-        {/* Graphic */}
-        <div className="relative z-30 mb-10">
+        {/* Graphic — 30% larger */}
+        <div className="relative z-30 mb-6">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/herder-splash.png"
             alt="Herder"
-            className="w-64 h-64 md:w-80 md:h-80 object-contain drop-shadow-xl"
+            className="w-[21rem] h-[21rem] md:w-[26rem] md:h-[26rem] object-contain drop-shadow-xl"
           />
         </div>
 
