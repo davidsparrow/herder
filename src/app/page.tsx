@@ -1,20 +1,24 @@
 import Link from "next/link";
 import ContactFooter from "@/components/ContactFooter";
 
+const SLOWER_SHEEP_CYCLE_MULTIPLIER = 1.75;
+
+const sheepDuration = (seconds: number) => `${seconds * SLOWER_SHEEP_CYCLE_MULTIPLIER}s`;
+
 // 12 sheep with staggered positions, durations, and animation variants
 const SHEEP = [
-  { left: "4%",  top: "8%",  anim: "wander-a", dur: "9s",    delay: "0s"    },
-  { left: "18%", top: "52%", anim: "wander-b", dur: "11.5s", delay: "-2.5s" },
-  { left: "36%", top: "22%", anim: "wander-c", dur: "8.5s",  delay: "-1s"   },
-  { left: "54%", top: "68%", anim: "wander-d", dur: "13s",   delay: "-5s"   },
-  { left: "72%", top: "32%", anim: "wander-a", dur: "10s",   delay: "-3s"   },
-  { left: "83%", top: "72%", anim: "wander-b", dur: "12s",   delay: "-7s"   },
-  { left: "11%", top: "80%", anim: "wander-c", dur: "9.5s",  delay: "-4s"   },
-  { left: "47%", top: "46%", anim: "wander-d", dur: "14s",   delay: "-6s"   },
-  { left: "29%", top: "78%", anim: "wander-a", dur: "11.5s", delay: "-8s"   },
-  { left: "67%", top: "14%", anim: "wander-b", dur: "8s",    delay: "-1.5s" },
-  { left: "89%", top: "50%", anim: "wander-c", dur: "15s",   delay: "-9s"   },
-  { left: "43%", top: "88%", anim: "wander-d", dur: "10.5s", delay: "-3.5s" },
+  { left: "4%",  top: "8%",  anim: "wander-a", dur: sheepDuration(9),    delay: "0s"    },
+  { left: "18%", top: "52%", anim: "wander-b", dur: sheepDuration(11.5), delay: "-2.5s" },
+  { left: "36%", top: "22%", anim: "wander-c", dur: sheepDuration(8.5),  delay: "-1s"   },
+  { left: "54%", top: "68%", anim: "wander-d", dur: sheepDuration(13),   delay: "-5s"   },
+  { left: "72%", top: "32%", anim: "wander-a", dur: sheepDuration(10),   delay: "-3s"   },
+  { left: "83%", top: "72%", anim: "wander-b", dur: sheepDuration(12),   delay: "-7s"   },
+  { left: "11%", top: "80%", anim: "wander-c", dur: sheepDuration(9.5),  delay: "-4s"   },
+  { left: "47%", top: "46%", anim: "wander-d", dur: sheepDuration(14),   delay: "-6s"   },
+  { left: "29%", top: "78%", anim: "wander-a", dur: sheepDuration(11.5), delay: "-8s"   },
+  { left: "67%", top: "14%", anim: "wander-b", dur: sheepDuration(8),    delay: "-1.5s" },
+  { left: "89%", top: "50%", anim: "wander-c", dur: sheepDuration(15),   delay: "-9s"   },
+  { left: "43%", top: "88%", anim: "wander-d", dur: sheepDuration(10.5), delay: "-3.5s" },
 ];
 
 export default function HomePage() {
@@ -43,21 +47,21 @@ export default function HomePage() {
         </div>
       </nav>
 
-      {/* Main — graphic stays large, but layout is packed tighter on mobile */}
-      <main className="relative z-20 flex-1 min-h-0 flex flex-col items-center px-4 pt-1 pb-1 sm:px-6 sm:pt-2">
+      {/* Main — give the splash more breathing room below the header */}
+      <main className="relative z-20 flex-1 min-h-0 flex flex-col items-center px-4 pt-16 pb-1 sm:px-6 sm:pt-20 md:pt-[100px]">
 
         {/* Graphic */}
-        <div className="relative z-30 flex w-full flex-1 min-h-0 items-start justify-center -mt-3 sm:-mt-6 mb-2">
+        <div className="relative z-30 flex w-full flex-1 min-h-0 items-start justify-center mb-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/herder-splash.png"
+            src="/herder_splash2.png"
             alt="Herder"
-            className="w-[21rem] md:w-[26rem] max-w-full h-auto max-h-full object-contain drop-shadow-xl"
+            className="w-[24rem] sm:w-[30rem] md:w-[38rem] lg:w-[44rem] max-w-full h-auto max-h-full object-contain drop-shadow-xl"
           />
         </div>
 
         {/* CTA Buttons */}
-        <div className="relative z-20 flex flex-col sm:flex-row gap-3 sm:gap-4 w-full max-w-sm pb-1">
+        <div className="relative z-20 -mt-6 flex w-full max-w-sm flex-col gap-3 pb-1 sm:-mt-8 sm:flex-row sm:gap-4 md:-mt-10">
           <Link
             href="/auth/login"
             className="btn-primary text-center py-3.5 sm:py-4 px-6 text-base flex-1"
@@ -87,6 +91,7 @@ export default function HomePage() {
               left: s.left,
               top: s.top,
               animation: `${s.anim} ${s.dur} ${s.delay} infinite ease-in-out`,
+              willChange: "transform",
             }}
           >
             🐑
