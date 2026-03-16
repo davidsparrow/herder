@@ -6,6 +6,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
+import BrandLockup from "@/components/BrandLockup";
 
 function AuthErrorBanner() {
   const searchParams = useSearchParams();
@@ -224,14 +225,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-cream flex flex-col items-center justify-center px-4">
-      <Link href="/" className="flex items-center gap-2.5 mb-10">
-        <div className="w-10 h-10 rounded-2xl bg-terra flex items-center justify-center">
-          <svg width="20" height="16" viewBox="0 0 18 14" fill="none">
-            <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-        <span className="font-display font-black text-2xl text-ink tracking-tight">Herder</span>
-      </Link>
+      <BrandLockup href="/" className="mb-10" />
 
       <div className="card p-8 w-full max-w-md animate-float-up">
         {sent ? (

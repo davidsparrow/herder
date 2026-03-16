@@ -1,5 +1,6 @@
 import Link from "next/link";
 import ContactFooter from "@/components/ContactFooter";
+import BrandLockup from "@/components/BrandLockup";
 
 export default function AboutPage() {
   const features = [
@@ -16,14 +17,7 @@ export default function AboutPage() {
       {/* Nav */}
       <nav className="sticky top-0 z-50 bg-cream/90 backdrop-blur-md border-b border-cream-border">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-terra flex items-center justify-center">
-              <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
-                <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <Link href="/" className="font-display font-black text-xl text-ink tracking-tight">Herder</Link>
-          </div>
+          <BrandLockup href="/" />
           <div className="hidden md:flex items-center gap-8 text-sm font-semibold text-ink-light">
             <Link href="/about" className="text-ink transition-colors">About</Link>
             <a href="#features" className="hover:text-ink transition-colors">Features</a>

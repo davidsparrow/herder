@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import BrandLockup from "@/components/BrandLockup";
 
 const NAV = [
   { href: "/dashboard",         icon: "⊞", label: "Dashboard" },
@@ -66,14 +67,7 @@ export function MobileNav({
       >
         {/* Drawer header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-cream-border">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-terra flex items-center justify-center flex-shrink-0">
-              <svg width="16" height="12" viewBox="0 0 18 14" fill="none">
-                <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <span className="font-display font-black text-lg text-ink tracking-tight">Herder</span>
-          </div>
+          <BrandLockup href="/" />
           <button
             onClick={() => setOpen(false)}
             aria-label="Close menu"

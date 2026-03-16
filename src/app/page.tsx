@@ -1,5 +1,6 @@
 import Link from "next/link";
 import ContactFooter from "@/components/ContactFooter";
+import BrandLockup from "@/components/BrandLockup";
 
 const SLOWER_SHEEP_CYCLE_MULTIPLIER = 1.75;
 
@@ -28,14 +29,7 @@ export default function HomePage() {
       {/* Nav */}
       <nav className="sticky top-0 z-50 bg-cream/90 backdrop-blur-md border-b border-cream-border">
         <div className="max-w-5xl mx-auto px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-terra flex items-center justify-center">
-              <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
-                <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <span className="font-display font-black text-lg sm:text-xl text-ink tracking-tight">Herder</span>
-          </div>
+          <BrandLockup href="/" />
           <div className="hidden md:flex items-center gap-8 text-sm font-semibold text-ink-light">
             <Link href="/about" className="hover:text-ink transition-colors">About</Link>
             <Link href="/about#features" className="hover:text-ink transition-colors">Features</Link>
@@ -52,25 +46,31 @@ export default function HomePage() {
 
         {/* Graphic */}
         <div className="relative z-30 flex w-full flex-1 min-h-0 items-start justify-center mb-2">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/herder_splash2.png"
-            alt="Herder"
-            className="w-[24rem] sm:w-[30rem] md:w-[38rem] lg:w-[44rem] max-w-full h-auto max-h-full object-contain drop-shadow-xl"
-          />
+          <div className="relative w-[25rem] max-w-full sm:w-[32rem] md:w-[40rem] lg:w-[46rem]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/herder_splash3.png"
+              alt="Herder"
+              className="block w-full h-auto max-h-full object-contain"
+            />
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute bottom-[4.8%] left-[4.6%] h-[4.6%] w-[42%] rounded-full bg-cream"
+            />
+          </div>
         </div>
 
         {/* CTA Buttons */}
-        <div className="relative z-20 -mt-6 flex w-full max-w-sm flex-col gap-3 pb-1 sm:-mt-8 sm:flex-row sm:gap-4 md:-mt-10">
+        <div className="relative z-20 -mt-6 flex w-full max-w-sm flex-col gap-3 pb-1 sm:-mt-8 sm:flex-row sm:gap-4 md:-mt-10 md:max-w-[40rem] md:justify-center">
           <Link
             href="/auth/login"
-            className="btn-primary text-center py-3.5 sm:py-4 px-6 text-base flex-1"
+            className="btn-primary flex-1 text-center text-base whitespace-nowrap px-6 py-3.5 sm:py-4 md:min-w-[18rem] md:px-8"
           >
             Start herding for free
           </Link>
           <Link
             href="/about"
-            className="btn-ghost text-center py-3.5 sm:py-4 px-6 text-base flex-1"
+            className="btn-ghost flex-1 text-center text-base whitespace-nowrap px-6 py-3.5 sm:py-4 md:min-w-[18rem] md:px-8"
           >
             What is Herder?
           </Link>
