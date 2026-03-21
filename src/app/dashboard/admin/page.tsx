@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  getSchemaDriftDiagnosticFromStrings,
+  getSchemaDriftUserMessage,
+} from "@/lib/flow-diagnostics";
 import { createClient } from "@/lib/supabase/client";
 import type { Org, Teacher } from "@/lib/types";
 
@@ -40,6 +44,18 @@ function sortTeachers(rows: TeacherDirectoryRow[]) {
   return [...rows].sort((left, right) => left.name.localeCompare(right.name) || (left.email ?? "").localeCompare(right.email ?? ""));
 }
 
+function getOrgContactSchemaWarning(...parts: Array<string | null | undefined>) {
+  const diagnostic = getSchemaDriftDiagnosticFromStrings(...parts);
+  if (diagnostic.suspectedMigration !== "0004_add_org_contact_fields.sql") {
+    return null;
+  }
+
+  const baseMessage = getSchemaDriftUserMessage("Organization contact fields", diagnostic)
+    ?? "Organization contact fields are unavailable because the deployed database is missing 0004_add_org_contact_fields.sql.";
+
+  return `${baseMessage} You can still save the organization name, but phone and email require that migration in production.`;
+}
+
 function AdminUnavailableState({
   title,
   description,
@@ -64,7 +80,9 @@ export default function AdminPage() {
   const [orgLoading, setOrgLoading] = useState(true);
   const [orgSaving, setOrgSaving] = useState(false);
   const [orgError, setOrgError] = useState<string | null>(null);
+  const [orgWarning, setOrgWarning] = useState<string | null>(null);
   const [orgSaved, setOrgSaved] = useState(false);
+  const [orgContactFieldsAvailable, setOrgContactFieldsAvailable] = useState(true);
   const [teachers, setTeachers] = useState<TeacherDirectoryRow[]>([]);
   const [teacherForm, setTeacherForm] = useState<TeacherForm>(EMPTY_TEACHER_FORM);
   const [teacherLoading, setTeacherLoading] = useState(true);
@@ -80,6 +98,8 @@ export default function AdminPage() {
       setOrgLoading(true);
       setTeacherLoading(true);
       setOrgError(null);
+      setOrgWarning(null);
+      setOrgContactFieldsAvailable(true);
       setTeacherError(null);
 
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -105,7 +125,7 @@ export default function AdminPage() {
         return;
       }
 
-      const [{ data: org, error: loadOrgError }, { data: teacherRows, error: loadTeacherError }] = await Promise.all([
+      const [{ data: orgWithContact, error: loadOrgError }, { data: teacherRows, error: loadTeacherError }] = await Promise.all([
         supabase
           .from("orgs")
           .select("id, name, phone, email")
@@ -122,18 +142,62 @@ export default function AdminPage() {
 
       if (!active) return;
 
-      if (loadOrgError || !org) {
-        setOrgError(loadOrgError?.message ?? "Could not load organization settings.");
+      let org = orgWithContact;
+      let nextOrgWarning: string | null = null;
+      let nextOrgContactFieldsAvailable = true;
+
+      if (loadOrgError) {
+        const schemaWarning = getOrgContactSchemaWarning(
+          loadOrgError.message,
+          loadOrgError.details,
+          loadOrgError.hint,
+        );
+
+        if (!schemaWarning) {
+          setOrgError(loadOrgError.message ?? "Could not load organization settings.");
+          setOrgLoading(false);
+          setTeacherLoading(false);
+          return;
+        }
+
+        const { data: fallbackOrg, error: fallbackOrgError } = await supabase
+          .from("orgs")
+          .select("id, name")
+          .eq("id", profile.org_id)
+          .single() as { data: Pick<Org, "id" | "name"> | null; error: any };
+
+        if (!active) return;
+
+        if (fallbackOrgError || !fallbackOrg) {
+          setOrgError(fallbackOrgError?.message ?? schemaWarning);
+          setOrgLoading(false);
+          setTeacherLoading(false);
+          return;
+        }
+
+        org = {
+          ...fallbackOrg,
+          phone: null,
+          email: null,
+        };
+        nextOrgWarning = schemaWarning;
+        nextOrgContactFieldsAvailable = false;
+      }
+
+      if (!org) {
+        setOrgError("Could not load organization settings.");
         setOrgLoading(false);
         setTeacherLoading(false);
         return;
       }
 
       setOrgId(org.id);
+      setOrgWarning(nextOrgWarning);
+      setOrgContactFieldsAvailable(nextOrgContactFieldsAvailable);
       setOrgSettings({
         name: org.name ?? "",
-        phone: org.phone ?? "",
-        email: org.email ?? "",
+        phone: nextOrgContactFieldsAvailable ? org.phone ?? "" : "",
+        email: nextOrgContactFieldsAvailable ? org.email ?? "" : "",
       });
 
       if (loadTeacherError) {
@@ -175,18 +239,62 @@ export default function AdminPage() {
     const phone = cleanOptionalValue(orgSettings.phone);
     const email = cleanOptionalValue(orgSettings.email);
 
-    const { error } = await supabase
-      .from("orgs")
-      .update({ name: trimmedName, phone, email })
-      .eq("id", orgId);
+    let saveError: any = null;
+    let nextOrgWarning = orgWarning;
+    let nextOrgContactFieldsAvailable = orgContactFieldsAvailable;
 
-    if (error) {
-      setOrgError(error.message);
+    if (orgContactFieldsAvailable) {
+      const { error } = await supabase
+        .from("orgs")
+        .update({ name: trimmedName, phone, email })
+        .eq("id", orgId);
+
+      if (error) {
+        const schemaWarning = getOrgContactSchemaWarning(error.message, error.details, error.hint);
+        if (!schemaWarning) {
+          saveError = error;
+        } else {
+          const { error: fallbackError } = await supabase
+            .from("orgs")
+            .update({ name: trimmedName })
+            .eq("id", orgId);
+
+          if (fallbackError) {
+            saveError = fallbackError;
+          } else {
+            nextOrgWarning = schemaWarning;
+            nextOrgContactFieldsAvailable = false;
+          }
+        }
+      }
+    } else {
+      const { error } = await supabase
+        .from("orgs")
+        .update({ name: trimmedName })
+        .eq("id", orgId);
+
+      if (error) {
+        saveError = error;
+      }
+    }
+
+    if (saveError) {
+      setOrgError(
+        getOrgContactSchemaWarning(saveError.message, saveError.details, saveError.hint)
+        ?? saveError.message
+        ?? "Could not save organization settings.",
+      );
       setOrgSaving(false);
       return;
     }
 
-    setOrgSettings({ name: trimmedName, phone: phone ?? "", email: email ?? "" });
+    setOrgWarning(nextOrgWarning);
+    setOrgContactFieldsAvailable(nextOrgContactFieldsAvailable);
+    setOrgSettings({
+      name: trimmedName,
+      phone: nextOrgContactFieldsAvailable ? phone ?? "" : "",
+      email: nextOrgContactFieldsAvailable ? email ?? "" : "",
+    });
     setOrgSaved(true);
     setOrgSaving(false);
   };
@@ -315,6 +423,12 @@ export default function AdminPage() {
               </div>
             )}
 
+            {orgWarning && (
+              <div className="rounded-2xl border border-gold/30 bg-gold-light px-4 py-3 text-sm text-ink-mid">
+                {orgWarning}
+              </div>
+            )}
+
             <div className="grid gap-4 md:grid-cols-3">
               <div>
                 <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">
@@ -346,7 +460,7 @@ export default function AdminPage() {
                   }}
                   placeholder="(555) 123-4567"
                   className="input-warm"
-                  disabled={orgLoading || orgSaving}
+                  disabled={orgLoading || orgSaving || !orgContactFieldsAvailable}
                 />
               </div>
 
@@ -363,13 +477,17 @@ export default function AdminPage() {
                   }}
                   placeholder="frontdesk@school.edu"
                   className="input-warm"
-                  disabled={orgLoading || orgSaving}
+                  disabled={orgLoading || orgSaving || !orgContactFieldsAvailable}
                 />
               </div>
             </div>
 
             <p className="text-xs text-ink-light">
-              {orgLoading ? "Loading organization settings…" : "These values are stored on your organization record and can be used by notification workflows."}
+              {orgLoading
+                ? "Loading organization settings…"
+                : orgContactFieldsAvailable
+                  ? "These values are stored on your organization record and can be used by notification workflows."
+                  : "Phone and email are temporarily unavailable until migration 0004_add_org_contact_fields.sql is applied in production. You can still save the organization name."}
             </p>
           </form>
         </div>

@@ -2,10 +2,11 @@
 
 export const dynamic = "force-dynamic";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
+import BrandLockup from "@/components/BrandLockup";
 
 function AuthErrorBanner() {
   const searchParams = useSearchParams();
@@ -24,6 +25,8 @@ const DEBUG_STORAGE_KEY = "herder_auth_debug";
 
 export default function LoginPage() {
   const supabase = useMemo(() => createClient(), []);
+  const emailInputRef = useRef<HTMLInputElement | null>(null);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -48,6 +51,28 @@ export default function LoginPage() {
     window.sessionStorage.removeItem(DEBUG_STORAGE_KEY);
     setDebugLog([]);
   };
+
+  const syncCredentialState = useCallback((source: string) => {
+    const nextEmail = emailInputRef.current?.value ?? "";
+    const nextPassword = passwordInputRef.current?.value ?? "";
+
+    setEmail((current) => current === nextEmail ? current : nextEmail);
+    setPassword((current) => current === nextPassword ? current : nextPassword);
+
+    if (nextEmail || nextPassword) {
+      appendDebug(`Credential fields synced from ${source} (email: ${nextEmail ? "yes" : "no"}, password: ${nextPassword ? "yes" : "no"})`);
+    }
+
+    return { nextEmail, nextPassword };
+  }, []);
+
+  const getCredentialValues = useCallback((source: string) => {
+    const { nextEmail, nextPassword } = syncCredentialState(source);
+    return {
+      email: nextEmail.trim(),
+      password: nextPassword,
+    };
+  }, [syncCredentialState]);
 
   useEffect(() => {
     const stored = window.sessionStorage.getItem(DEBUG_STORAGE_KEY);
@@ -76,6 +101,10 @@ export default function LoginPage() {
 
     setDebugLog(nextLog);
 
+    const autofillSyncTimers = [0, 150, 500, 1200].map((delay) => window.setTimeout(() => {
+      syncCredentialState(`autofill-check-${delay}ms`);
+    }, delay));
+
     const loadClientAuthState = async () => {
       const [{ data: sessionData, error: sessionError }, { data: userData, error: userError }] = await Promise.all([
         supabase.auth.getSession(),
@@ -99,14 +128,23 @@ export default function LoginPage() {
     };
 
     void loadClientAuthState();
-  }, [supabase]);
+
+    return () => {
+      autofillSyncTimers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [supabase, syncCredentialState]);
 
   const sendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
+    const { email: currentEmail } = getCredentialValues("magic-submit");
+    if (!currentEmail) {
+      setError("Please enter your email address.");
+      return;
+    }
     setLoading(true); setError(null);
     appendDebug("Magic link sign-in started");
     const { error } = await supabase.auth.signInWithOtp({
-      email,
+      email: currentEmail,
       options: {
         emailRedirectTo: `${window.location.origin}/auth/callback`,
         shouldCreateUser: true,
@@ -140,9 +178,14 @@ export default function LoginPage() {
 
   const signInWithPassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    const { email: currentEmail, password: currentPassword } = getCredentialValues("password-submit");
+    if (!currentEmail || !currentPassword) {
+      setError("Please enter your email and password.");
+      return;
+    }
     setLoading(true); setError(null);
     appendDebug("Password sign-in started");
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email: currentEmail, password: currentPassword });
     if (error) {
       appendDebug(`Password sign-in error: ${error.message}`);
       setLoading(false);
@@ -169,9 +212,14 @@ export default function LoginPage() {
 
   const signUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    const { email: currentEmail, password: currentPassword } = getCredentialValues("signup-submit");
+    if (!currentEmail || !currentPassword) {
+      setError("Please enter your email and password.");
+      return;
+    }
     setLoading(true); setError(null);
     appendDebug("Create account started");
-    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password });
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email: currentEmail, password: currentPassword });
     if (signUpError) {
       appendDebug(`Create account error: ${signUpError.message}`);
       setLoading(false);
@@ -184,7 +232,7 @@ export default function LoginPage() {
     let session = signUpData?.session;
     if (!session) {
       appendDebug("Signup returned no session; attempting password sign-in fallback");
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email: currentEmail, password: currentPassword });
       if (signInError) {
         appendDebug(`Fallback password sign-in error: ${signInError.message}`);
         setLoading(false);
@@ -222,16 +270,12 @@ export default function LoginPage() {
     });
   };
 
+  const canSubmitPassword = Boolean(email.trim() && password);
+  const canSubmitMagicLink = Boolean(email.trim());
+
   return (
     <div className="min-h-screen bg-cream flex flex-col items-center justify-center px-4">
-      <Link href="/" className="flex items-center gap-2.5 mb-10">
-        <div className="w-10 h-10 rounded-2xl bg-terra flex items-center justify-center">
-          <svg width="20" height="16" viewBox="0 0 18 14" fill="none">
-            <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-        <span className="font-display font-black text-2xl text-ink tracking-tight">Herder</span>
-      </Link>
+      <BrandLockup href="/" className="mb-10" />
 
       <div className="card p-8 w-full max-w-md animate-float-up">
         {sent ? (
@@ -322,15 +366,15 @@ export default function LoginPage() {
               <form onSubmit={signInWithPassword} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">Email</label>
-                  <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                  <input ref={emailInputRef} name="email" autoComplete="email" type="email" required value={email} onChange={e => setEmail(e.target.value)} onInput={() => syncCredentialState("email-input")}
                     placeholder="you@school.edu" className="input-warm" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">Password</label>
-                  <input type="password" required value={password} onChange={e => setPassword(e.target.value)}
+                  <input ref={passwordInputRef} name="password" autoComplete="current-password" type="password" required value={password} onChange={e => setPassword(e.target.value)} onInput={() => syncCredentialState("password-input")}
                     placeholder="••••••••" className="input-warm" />
                 </div>
-                <button type="submit" disabled={loading || !email || !password}
+                <button type="submit" disabled={loading || !canSubmitPassword}
                   className="btn-primary w-full py-3 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
                   {loading ? "Signing in…" : "Sign in →"}
                 </button>
@@ -342,10 +386,10 @@ export default function LoginPage() {
               <form onSubmit={sendMagicLink} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">Email</label>
-                  <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                  <input ref={emailInputRef} name="email" autoComplete="email" type="email" required value={email} onChange={e => setEmail(e.target.value)} onInput={() => syncCredentialState("email-input")}
                     placeholder="you@school.edu" className="input-warm" />
                 </div>
-                <button type="submit" disabled={loading || !email}
+                <button type="submit" disabled={loading || !canSubmitMagicLink}
                   className="btn-primary w-full py-3 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
                   {loading ? "Sending…" : "Send magic link →"}
                 </button>
@@ -357,15 +401,15 @@ export default function LoginPage() {
               <form onSubmit={signUp} className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">Email</label>
-                  <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                  <input ref={emailInputRef} name="email" autoComplete="email" type="email" required value={email} onChange={e => setEmail(e.target.value)} onInput={() => syncCredentialState("email-input")}
                     placeholder="you@school.edu" className="input-warm" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-ink-light uppercase tracking-widest mb-2">Password</label>
-                  <input type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)}
+                  <input ref={passwordInputRef} name="new-password" autoComplete="new-password" type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)} onInput={() => syncCredentialState("password-input")}
                     placeholder="min. 6 characters" className="input-warm" />
                 </div>
-                <button type="submit" disabled={loading || !email || !password}
+                <button type="submit" disabled={loading || !canSubmitPassword}
                   className="btn-primary w-full py-3 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
                   {loading ? "Creating account…" : "Create account →"}
                 </button>

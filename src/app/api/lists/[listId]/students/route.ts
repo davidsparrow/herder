@@ -11,7 +11,8 @@ import type { CustomColumn } from "@/lib/types";
 
 type RouteContext = { params: { listId: string } };
 
-type AddStudentRequestBody = {
+type StudentMutationRequestBody = {
+  studentId?: string;
   name?: string;
   firstName?: string;
   lastName?: string;
@@ -20,9 +21,14 @@ type AddStudentRequestBody = {
   guardianPhone?: string;
   guardianEmail?: string;
   shortCode?: string;
+  pickupNotesPre?: string;
+  pickupNotesPost?: string;
   pickupDropLocation?: string;
   allergies?: string;
   specialNeeds?: string;
+  age?: string;
+  notes?: string;
+  postClassNotes?: string;
 };
 
 function normalizeTrimmedString(value: unknown) {
@@ -70,11 +76,39 @@ function mergeCustomColumns(existing: CustomColumn[], incomingKeys: Iterable<str
   return merged;
 }
 
-export async function POST(req: NextRequest, { params }: RouteContext) {
+function normalizeExistingCustomData(value: unknown) {
+  return value && typeof value === "object"
+    ? value as Record<string, string | boolean | null>
+    : {};
+}
+
+function buildStudentCustomData(body: StudentMutationRequestBody) {
+  const pickupNotesPre = normalizeTrimmedString(body.pickupNotesPre) || normalizeTrimmedString(body.pickupDropLocation);
+  return {
+    child_sheet_number: normalizeTrimmedString(body.childSheetNumber) || null,
+    guardian_name: normalizeTrimmedString(body.guardianName) || null,
+    guardian_phone: normalizeTrimmedString(body.guardianPhone) || null,
+    guardian_email: normalizeTrimmedString(body.guardianEmail) || null,
+    short_code: normalizeTrimmedString(body.shortCode) || null,
+    pickup_notes_pre: pickupNotesPre || null,
+    pickup_notes_post: normalizeTrimmedString(body.pickupNotesPost) || null,
+    allergies: normalizeTrimmedString(body.allergies) || null,
+    special_needs: normalizeTrimmedString(body.specialNeeds) || null,
+    age: normalizeTrimmedString(body.age) || null,
+    notes: normalizeTrimmedString(body.notes) || null,
+    post_class_notes: normalizeTrimmedString(body.postClassNotes) || null,
+  } satisfies Record<string, string | null>;
+}
+
+function getPopulatedCustomFieldKeys(customData: Record<string, string | null>) {
+  return Object.entries(customData).flatMap(([key, value]) => (value ? [key] : []));
+}
+
+async function getAuthorizedListContext(listIdParam: string) {
   const supabase = createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (!user || authError) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return { response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
 
   const { data: profile, error: profileError } = await supabase
@@ -84,16 +118,16 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     .single();
 
   if (profileError) {
-    return NextResponse.json({ error: profileError.message }, { status: 500 });
+    return { response: NextResponse.json({ error: profileError.message }, { status: 500 }) };
   }
 
   if (!profile) {
-    return NextResponse.json({ error: "Profile not found" }, { status: 404 });
+    return { response: NextResponse.json({ error: "Profile not found" }, { status: 404 }) };
   }
 
-  const listId = normalizeTrimmedString(params.listId);
+  const listId = normalizeTrimmedString(listIdParam);
   if (!listId) {
-    return NextResponse.json({ error: "A list ID is required." }, { status: 400 });
+    return { response: NextResponse.json({ error: "A list ID is required." }, { status: 400 }) };
   }
 
   const { data: list, error: listError } = await supabase
@@ -105,14 +139,25 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     .maybeSingle();
 
   if (listError) {
-    return NextResponse.json({ error: listError.message }, { status: 500 });
+    return { response: NextResponse.json({ error: listError.message }, { status: 500 }) };
   }
 
   if (!list) {
-    return NextResponse.json({ error: "The selected list could not be found." }, { status: 404 });
+    return { response: NextResponse.json({ error: "The selected list could not be found." }, { status: 404 }) };
   }
 
-  const body = await req.json() as AddStudentRequestBody;
+  return { supabase, profile, list };
+}
+
+export async function POST(req: NextRequest, { params }: RouteContext) {
+  const context = await getAuthorizedListContext(params.listId);
+  if ("response" in context) {
+    return context.response;
+  }
+
+  const { supabase, profile, list } = context;
+
+  const body = await req.json() as StudentMutationRequestBody;
   const explicitName = normalizeTrimmedString(body.name);
   const firstName = normalizeTrimmedString(body.firstName);
   const lastName = normalizeTrimmedString(body.lastName);
@@ -123,20 +168,12 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     return NextResponse.json({ error: "A student name is required." }, { status: 400 });
   }
 
-  const customData = {
-    child_sheet_number: normalizeTrimmedString(body.childSheetNumber) || null,
-    guardian_name: normalizeTrimmedString(body.guardianName) || null,
-    guardian_phone: normalizeTrimmedString(body.guardianPhone) || null,
-    guardian_email: normalizeTrimmedString(body.guardianEmail) || null,
-    short_code: normalizeTrimmedString(body.shortCode) || null,
-    pickup_drop_location: normalizeTrimmedString(body.pickupDropLocation) || null,
-    allergies: normalizeTrimmedString(body.allergies) || null,
-    special_needs: normalizeTrimmedString(body.specialNeeds) || null,
-  } satisfies Record<string, string | null>;
+  const customData = buildStudentCustomData(body);
+  const pickupNotesPre = customData.pickup_notes_pre ?? "";
 
   const { data: existingStudents, error: existingStudentsError } = await supabase
     .from("students")
-    .select("uid, name")
+    .select("id, uid, name")
     .eq("list_id", list.id)
     .order("uid");
 
@@ -169,7 +206,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
 
   const nextCustomColumns = mergeCustomColumns(
     normalizeCustomColumns(list.custom_columns),
-    Object.entries(customData).flatMap(([key, value]) => (value ? [key] : []))
+    getPopulatedCustomFieldKeys(customData)
   );
 
   const { error: updateListError } = await supabase
@@ -182,7 +219,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         stop_time: "",
         room_location: "",
         teacher_name: "",
-        default_pickup_drop_location: normalizeTrimmedString(body.pickupDropLocation),
+        default_pickup_drop_location: pickupNotesPre,
       }),
     })
     .eq("id", list.id)
@@ -193,4 +230,107 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
   }
 
   return NextResponse.json({ success: true, data: createdStudent });
+}
+
+export async function PATCH(req: NextRequest, { params }: RouteContext) {
+  const context = await getAuthorizedListContext(params.listId);
+  if ("response" in context) {
+    return context.response;
+  }
+
+  const { supabase, profile, list } = context;
+  const body = await req.json() as StudentMutationRequestBody;
+  const studentId = normalizeTrimmedString(body.studentId);
+  if (!studentId) {
+    return NextResponse.json({ error: "A student ID is required." }, { status: 400 });
+  }
+
+  const [{ data: existingStudent, error: existingStudentError }, { data: rosterStudents, error: rosterStudentsError }] = await Promise.all([
+    supabase
+      .from("students")
+      .select("id, list_id, uid, name, first_name, last_name, custom_data, qr_code_url, created_at")
+      .eq("id", studentId)
+      .eq("list_id", list.id)
+      .maybeSingle(),
+    supabase
+      .from("students")
+      .select("id, name")
+      .eq("list_id", list.id),
+  ]);
+
+  if (existingStudentError) {
+    return NextResponse.json({ error: existingStudentError.message }, { status: 500 });
+  }
+
+  if (rosterStudentsError) {
+    return NextResponse.json({ error: rosterStudentsError.message }, { status: 500 });
+  }
+
+  if (!existingStudent) {
+    return NextResponse.json({ error: "The selected student could not be found on this list." }, { status: 404 });
+  }
+
+  const explicitName = normalizeTrimmedString(body.name);
+  const firstName = normalizeTrimmedString(body.firstName);
+  const lastName = normalizeTrimmedString(body.lastName);
+  const derivedName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const nameParts = splitStudentNameParts(explicitName || derivedName || existingStudent.name);
+  if (!nameParts.displayName) {
+    return NextResponse.json({ error: "A student name is required." }, { status: 400 });
+  }
+
+  const nextNameKey = normalizeStudentNameKey(nameParts.displayName);
+  if ((rosterStudents ?? []).some((student) => student.id !== studentId && normalizeStudentNameKey(student.name) === nextNameKey)) {
+    return NextResponse.json({ error: `A student named ${nameParts.displayName} already exists on this list.` }, { status: 409 });
+  }
+
+  const customData = buildStudentCustomData(body);
+  const pickupNotesPre = customData.pickup_notes_pre ?? "";
+  const existingCustomData = normalizeExistingCustomData(existingStudent.custom_data);
+  const { data: updatedStudent, error: updatedStudentError } = await supabase
+    .from("students")
+    .update({
+      name: nameParts.displayName,
+      first_name: firstName || nameParts.firstName,
+      last_name: lastName || nameParts.lastName,
+      custom_data: {
+        ...existingCustomData,
+        ...customData,
+      },
+    })
+    .eq("id", studentId)
+    .eq("list_id", list.id)
+    .select("id, list_id, uid, name, first_name, last_name, custom_data, qr_code_url, created_at")
+    .single();
+
+  if (updatedStudentError || !updatedStudent) {
+    return NextResponse.json({ error: updatedStudentError?.message ?? "Failed to update the student." }, { status: 500 });
+  }
+
+  const nextCustomColumns = mergeCustomColumns(
+    normalizeCustomColumns(list.custom_columns),
+    getPopulatedCustomFieldKeys(customData)
+  );
+
+  const { error: updateListError } = await supabase
+    .from("checkin_lists")
+    .update({
+      custom_columns: nextCustomColumns,
+      source_metadata: mergeSourceMetadata(list.source_metadata, {
+        class_list_title: "",
+        start_time: "",
+        stop_time: "",
+        room_location: "",
+        teacher_name: "",
+        default_pickup_drop_location: pickupNotesPre,
+      }),
+    })
+    .eq("id", list.id)
+    .eq("org_id", profile.org_id);
+
+  if (updateListError) {
+    return NextResponse.json({ error: updateListError.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true, data: updatedStudent });
 }

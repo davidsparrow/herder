@@ -1,0 +1,35 @@
+0 verbose cli /opt/homebrew/Cellar/node/24.4.1/bin/node /opt/homebrew/bin/npm
+1 info using npm@11.4.2
+2 info using node@v24.4.1
+3 silly config load:file:/opt/homebrew/lib/node_modules/npm/npmrc
+4 silly config load:file:/Users/davidsparrow/.npmrc
+5 silly config load:file:/opt/homebrew/etc/npmrc
+6 verbose title npm run dev
+7 verbose argv "run" "dev"
+8 verbose logfile logs-max:10 dir:/Users/davidsparrow/.npm/_logs/2026-03-19T00_43_09_212Z-
+9 verbose logfile /Users/davidsparrow/.npm/_logs/2026-03-19T00_43_09_212Z-debug-0.log
+10 silly logfile start cleaning logs, removing 1 files
+11 verbose stack Error: Could not read package.json: Error: ENOENT: no such file or directory, open '/Users/davidsparrow/package.json'
+11 verbose stack     at async open (node:internal/fs/promises:640:25)
+11 verbose stack     at async readFile (node:internal/fs/promises:1277:14)
+11 verbose stack     at async read (/opt/homebrew/lib/node_modules/npm/node_modules/@npmcli/package-json/lib/read-package.js:9:18)
+11 verbose stack     at async PackageJson.load (/opt/homebrew/lib/node_modules/npm/node_modules/@npmcli/package-json/lib/index.js:132:31)
+11 verbose stack     at async PackageJson.normalize (/opt/homebrew/lib/node_modules/npm/node_modules/@npmcli/package-json/lib/index.js:118:5)
+11 verbose stack     at async #run (/opt/homebrew/lib/node_modules/npm/lib/commands/run.js:90:13)
+11 verbose stack     at async RunScript.exec (/opt/homebrew/lib/node_modules/npm/lib/commands/run.js:44:7)
+11 verbose stack     at async Npm.exec (/opt/homebrew/lib/node_modules/npm/lib/npm.js:208:9)
+11 verbose stack     at async module.exports (/opt/homebrew/lib/node_modules/npm/lib/cli/entry.js:67:5)
+12 error code ENOENT
+13 error syscall open
+14 error path /Users/davidsparrow/package.json
+15 error errno -2
+16 error enoent Could not read package.json: Error: ENOENT: no such file or directory, open '/Users/davidsparrow/package.json'
+17 error enoent This is related to npm not being able to find a file.
+17 error enoent
+18 verbose cwd /Users/davidsparrow
+19 verbose os Darwin 22.6.0
+20 verbose node v24.4.1
+21 verbose npm  v11.4.2
+22 verbose exit -2
+23 verbose code -2
+24 error A complete log of this run can be found in: /Users/davidsparrow/.npm/_logs/2026-03-19T00_43_09_212Z-debug-0.log
