@@ -2,7 +2,7 @@
 
 **Smart check-in for classes, camps, events — anything.**
 
-Snap a photo of any paper roster. Herder uses Gemini AI to extract names, builds a live check-in list, and sends automated SMS/email notifications to guardians.
+Snap a photo of any paper roster. upload docs & pdfs. Herder uses Gemini AI to extract names, builds a live check-in list, and sends automated SMS/email notifications to guardians.
 
 ---
 
