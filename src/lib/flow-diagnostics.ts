@@ -42,6 +42,18 @@ export function getSchemaDriftDiagnosticFromStrings(...parts: Array<string | nul
   }
 
   if (
+    combined.includes("orgs.phone")
+    || combined.includes("orgs.email")
+    || (combined.includes('relation "orgs"') && (combined.includes('"phone"') || combined.includes('"email"')))
+    || (combined.includes(" relation orgs ") && (combined.includes(" phone ") || combined.includes(" email ")))
+  ) {
+    return {
+      suspectedMigration: "0004_add_org_contact_fields.sql",
+      reason: "Current code expects orgs.phone and orgs.email.",
+    };
+  }
+
+  if (
     combined.includes("first_name")
     || combined.includes("last_name")
     || combined.includes("source_metadata")

@@ -42,10 +42,10 @@ export default function HomePage() {
       </nav>
 
       {/* Main — give the splash more breathing room below the header */}
-      <main className="relative z-20 flex-1 min-h-0 flex flex-col items-center px-4 pt-16 pb-1 sm:px-6 sm:pt-20 md:pt-[100px]">
+      <main className="relative z-20 flex-1 min-h-0 flex flex-col items-center px-4 pt-16 pb-16 sm:px-6 sm:pt-20 sm:pb-20 md:pt-[100px] md:pb-24">
 
         {/* Graphic */}
-        <div className="relative z-30 flex w-full flex-1 min-h-0 items-start justify-center mb-2">
+        <div className="relative z-30 flex w-full flex-1 min-h-0 items-start justify-center">
           <div className="relative w-[25rem] max-w-full sm:w-[32rem] md:w-[40rem] lg:w-[46rem]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -61,7 +61,7 @@ export default function HomePage() {
         </div>
 
         {/* CTA Buttons */}
-        <div className="relative z-20 -mt-6 flex w-full max-w-sm flex-col gap-3 pb-1 sm:-mt-8 sm:flex-row sm:gap-4 md:-mt-10 md:max-w-[40rem] md:justify-center">
+        <div className="relative z-20 mt-6 flex w-full max-w-sm flex-col gap-3 sm:mt-8 sm:flex-row sm:gap-4 md:mt-10 md:max-w-[40rem] md:justify-center">
           <Link
             href="/auth/login"
             className="btn-primary flex-1 text-center text-base whitespace-nowrap px-6 py-3.5 sm:py-4 md:min-w-[18rem] md:px-8"

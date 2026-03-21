@@ -127,6 +127,72 @@ function normalizeOptionalString(value: string | null | undefined) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+const MATCHABLE_UPLOAD_FIELD_MAPPINGS = UPLOAD_FIELD_MAPPINGS.filter(
+  (mapping): mapping is Exclude<UploadFieldMapping, "(Ignore)"> => mapping !== "(Ignore)"
+);
+
+function normalizeUploadFieldMapping(value: unknown): UploadFieldMapping | null {
+  if (value === "Pickup Location") {
+    return "Pickup Notes-pre";
+  }
+
+  if (value === "Drop-off Location") {
+    return "Pickup Notes-post";
+  }
+
+  return typeof value === "string" && UPLOAD_FIELD_MAPPINGS.includes(value as UploadFieldMapping)
+    ? value as UploadFieldMapping
+    : null;
+}
+
+function normalizeMappingLabel(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function tokenizeMappingLabel(value: string) {
+  return normalizeMappingLabel(value).split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+function startsWithSameWord(header: string, mapping: Exclude<UploadFieldMapping, "(Ignore)">) {
+  const headerFirstWord = tokenizeMappingLabel(header)[0];
+  const mappingFirstWord = tokenizeMappingLabel(mapping)[0];
+  return Boolean(headerFirstWord && mappingFirstWord && headerFirstWord === mappingFirstWord);
+}
+
+function headerSuggestsGuardianName(header: string) {
+  const normalizedHeader = normalizeMappingLabel(header);
+  return [
+    "guardian",
+    "parent",
+    "parent guardian",
+    "guardian parent",
+    "parent or guardian",
+    "guardian or parent",
+    "authorized pickup",
+    "authorized adult",
+    "pickup person",
+    "pickup contact",
+    "primary guardian",
+    "contact name",
+  ].some((phrase) => normalizedHeader.includes(phrase));
+}
+
+function getDisplayedMappingConfidence(header: string, mapping: UploadFieldMapping, confidence: number) {
+  if (mapping !== "(Ignore)" && MATCHABLE_UPLOAD_FIELD_MAPPINGS.includes(mapping) && normalizeMappingLabel(header) === normalizeMappingLabel(mapping)) {
+    return 100;
+  }
+
+  if (mapping === "Guardian Name" && headerSuggestsGuardianName(header)) {
+    return Math.max(confidence, 94);
+  }
+
+  if (mapping === "Pickup Notes-pre" && startsWithSameWord(header, mapping)) {
+    return Math.max(confidence, 93);
+  }
+
+  return confidence;
+}
+
 function normalizeTimeInputValue(value: string | null | undefined) {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -526,9 +592,7 @@ export default function UploadPage() {
     setTeacherSelectionTouched(false);
     setExtracted(data);
     setMappings(data.detected_columns.map((column) =>
-      UPLOAD_FIELD_MAPPINGS.includes(column.suggested_mapping as UploadFieldMapping)
-        ? column.suggested_mapping as UploadFieldMapping
-        : "(Ignore)"
+      normalizeUploadFieldMapping(column.suggested_mapping) ?? "(Ignore)"
     ));
     setClassName(normalizeOptionalString(extractedMetadata.class_list_title));
     setTime(parsedStartTime || (extractedStartTime ? "" : "08:30"));
@@ -803,7 +867,7 @@ export default function UploadPage() {
   const steps = ["Upload","Map Columns","Schedule","Done"];
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 max-w-2xl mx-auto">
+    <div className="flex-1 min-h-0 w-full overflow-y-auto p-6 pb-10 max-w-4xl mx-auto">
       {/* Step dots */}
       <div className="flex items-center gap-2 mb-8">
         {steps.map((s, i) => (
@@ -894,22 +958,27 @@ export default function UploadPage() {
             <div className="grid grid-cols-[1fr_24px_1fr_72px] gap-3 px-5 py-3 bg-parchment border-b border-cream-border text-xs font-bold uppercase tracking-widest text-ink-light">
               <span>In your file</span><span /><span>Maps to</span><span>Match</span>
             </div>
-            {extracted.detected_columns.map((col, i) => (
-              <div key={i} className="grid grid-cols-[1fr_24px_1fr_72px] gap-3 px-5 py-3.5 border-b border-cream-border last:border-0 items-center">
-                <span className="text-sm font-semibold text-ink">{col.header}</span>
-                <span className="text-terra text-center">→</span>
-                <select value={mappings[i] ?? col.suggested_mapping}
-                  onChange={e => setMappings(m => m.map((v, j) => j === i ? e.target.value as UploadFieldMapping : v))}
-                  className="input-warm py-2 text-sm">
-                  {UPLOAD_FIELD_MAPPINGS.map(o => <option key={o}>{o}</option>)}
-                </select>
-                <div className="pl-2">
-                  <span className={`text-xs font-bold rounded-lg px-2 py-1 ${confColor(col.confidence)}`}>
-                    {col.confidence}%
-                  </span>
+            {extracted.detected_columns.map((col, i) => {
+              const selectedMapping = mappings[i] ?? normalizeUploadFieldMapping(col.suggested_mapping) ?? "(Ignore)";
+              const displayedConfidence = getDisplayedMappingConfidence(col.header, selectedMapping, col.confidence);
+
+              return (
+                <div key={i} className="grid grid-cols-[1fr_24px_1fr_72px] gap-3 px-5 py-3.5 border-b border-cream-border last:border-0 items-center">
+                  <span className="text-sm font-semibold text-ink">{col.header}</span>
+                  <span className="text-terra text-center">→</span>
+                  <select value={selectedMapping}
+                    onChange={e => setMappings(m => m.map((v, j) => j === i ? e.target.value as UploadFieldMapping : v))}
+                    className="input-warm py-2 text-sm">
+                    {UPLOAD_FIELD_MAPPINGS.map(o => <option key={o}>{o}</option>)}
+                  </select>
+                  <div className="pl-2">
+                    <span className={`text-xs font-bold rounded-lg px-2 py-1 ${confColor(displayedConfidence)}`}>
+                      {displayedConfidence}%
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="bg-terra-light border border-terra/30 rounded-2xl px-5 py-3.5 text-sm text-terra-dark mb-6">

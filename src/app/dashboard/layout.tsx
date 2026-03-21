@@ -4,6 +4,7 @@ import Link from "next/link";
 import { PLANS } from "@/lib/plans";
 import type { Profile } from "@/lib/types";
 import { getSignedInIdentity } from "@/lib/user-identity";
+import BrandLockup from "@/components/BrandLockup";
 import { MobileNav } from "./MobileNav";
 
 const NAV = [
@@ -46,11 +47,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
       {/* Sidebar — hidden on mobile, visible md+ */}
       <aside className="hidden md:flex w-16 bg-white border-r border-cream-border flex-col items-center py-4 gap-1 shadow-warm z-10 flex-shrink-0">
         {/* Logo */}
-        <div className="w-9 h-9 rounded-xl bg-terra flex items-center justify-center mb-5">
-          <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
-            <path d="M2 7L7 12L16 2" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </div>
+        <BrandLockup
+          href="/"
+          showText={false}
+          className="mb-5"
+          iconClassName="h-9 w-9 bg-transparent p-0"
+        />
 
         {NAV.map(n => (
           <Link key={n.href} href={n.href} title={n.label}
@@ -102,7 +104,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-hidden">
+        <main className="flex flex-1 min-h-0 overflow-hidden">
           {children}
         </main>
       </div>

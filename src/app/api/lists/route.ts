@@ -10,6 +10,7 @@ import {
 import { canCreateList } from "@/lib/plans";
 import {
   buildCustomColumnsFromKeys,
+  buildMappedCustomFieldKeys,
   buildSourceMetadataFromExtraction,
   buildStudentDraftsFromExtraction,
   getNextStudentUid,
@@ -95,6 +96,18 @@ function getListFailureCode(partialPersistenceHint?: string | null) {
 
 function isUploadFieldMapping(value: unknown): value is UploadFieldMapping {
   return typeof value === "string" && UPLOAD_FIELD_MAPPINGS.includes(value as UploadFieldMapping);
+}
+
+function normalizeUploadFieldMapping(value: unknown): UploadFieldMapping | null {
+  if (value === "Pickup Location") {
+    return "Pickup Notes-pre";
+  }
+
+  if (value === "Drop-off Location") {
+    return "Pickup Notes-post";
+  }
+
+  return isUploadFieldMapping(value) ? value : null;
 }
 
 function normalizeTrimmedString(value: unknown) {
@@ -208,11 +221,12 @@ function getSelectedRecurringDays(recurringDays: boolean[]) {
 }
 
 function getSelectedMapping(column: DetectedColumn, mapping: unknown): UploadFieldMapping {
-  if (isUploadFieldMapping(mapping)) {
-    return mapping;
+  const selectedMapping = normalizeUploadFieldMapping(mapping);
+  if (selectedMapping) {
+    return selectedMapping;
   }
 
-  return isUploadFieldMapping(column.suggested_mapping) ? column.suggested_mapping : "(Ignore)";
+  return normalizeUploadFieldMapping(column.suggested_mapping) ?? "(Ignore)";
 }
 
 function draftFromStudent(student: ExistingStudentRow): PersistedStudentDraft {
@@ -445,7 +459,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No student names were available to save." }, { status: 400 });
   }
 
-  const incomingCustomColumnKeys = new Set(incomingStudents.flatMap((student) => Object.keys(student.custom_data)));
+  const mappedCustomColumnKeys = buildMappedCustomFieldKeys(selectedMappings);
+  const incomingCustomColumnKeys = new Set([
+    ...Array.from(mappedCustomColumnKeys),
+    ...incomingStudents.flatMap((student) => Object.keys(student.custom_data)),
+  ]);
   const extractedSourceMetadata = buildSourceMetadataFromExtraction(extracted);
   const sourceMetadata: CheckinListSourceMetadata = {
     ...extractedSourceMetadata,

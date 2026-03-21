@@ -67,7 +67,7 @@ export function MobileNav({
       >
         {/* Drawer header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-cream-border">
-          <BrandLockup href="/" />
+          <BrandLockup href="/" showText={false} iconClassName="h-10 w-10 bg-transparent p-0" />
           <button
             onClick={() => setOpen(false)}
             aria-label="Close menu"

@@ -13,13 +13,17 @@ export const STUDENT_CUSTOM_FIELD_DEFINITIONS = {
   guardian_phone: { label: "Guardian Phone", type: "phone" },
   guardian_email: { label: "Guardian Email", type: "text" },
   short_code: { label: "Short Code", type: "text" },
-  pickup_drop_location: { label: "Pickup / Drop-off", type: "text" },
-  pickup_location: { label: "Pickup Location", type: "text" },
-  dropoff_location: { label: "Drop-off Location", type: "text" },
+  pickup_notes_pre: { label: "Pickup Notes-pre", type: "text" },
+  pickup_notes_post: { label: "Pickup Notes-post", type: "text" },
   allergies: { label: "Allergies", type: "text" },
   special_needs: { label: "Special Needs", type: "text" },
-  notes: { label: "Notes", type: "text" },
+  notes: { label: "Pre-class Notes", type: "text" },
+  post_class_notes: { label: "Post-class Notes", type: "text" },
   age: { label: "Age", type: "text" },
+  primary_contact_name: { label: "Primary Contact Name", type: "text" },
+  primary_contact_relation: { label: "Primary Contact Relation", type: "text" },
+  primary_contact_phone: { label: "Primary Contact Phone", type: "phone" },
+  primary_contact_email: { label: "Primary Contact Email", type: "text" },
 } as const satisfies Record<string, { label: string; type: CustomColumn["type"] }>;
 
 export const STUDENT_CUSTOM_FIELD_LABELS = Object.fromEntries(
@@ -27,12 +31,13 @@ export const STUDENT_CUSTOM_FIELD_LABELS = Object.fromEntries(
 ) as Record<string, string>;
 
 const MAPPING_FIELD_KEYS: Partial<Record<UploadFieldMapping, keyof typeof STUDENT_CUSTOM_FIELD_DEFINITIONS>> = {
+  "Guardian Name": "guardian_name",
   "Guardian Phone": "guardian_phone",
   "Guardian Email": "guardian_email",
   "Age (calculate)": "age",
   Allergies: "allergies",
-  "Pickup Location": "pickup_location",
-  "Drop-off Location": "dropoff_location",
+  "Pickup Notes-pre": "pickup_notes_pre",
+  "Pickup Notes-post": "pickup_notes_post",
   "Special Needs": "special_needs",
   Notes: "notes",
 };
@@ -107,7 +112,7 @@ function buildDraftFromStructuredRow(row: GeminiRosterRow, fallbackName: string)
   setIfPresent(customData, "guardian_phone", row.guardian_phone);
   setIfPresent(customData, "guardian_email", row.guardian_email);
   setIfPresent(customData, "short_code", row.short_code);
-  setIfPresent(customData, "pickup_drop_location", row.pickup_drop_location);
+  setIfPresent(customData, "pickup_notes_pre", row.pickup_drop_location);
   setIfPresent(customData, "allergies", row.allergies);
   setIfPresent(customData, "special_needs", row.special_needs);
 
@@ -158,6 +163,19 @@ export function buildStudentDraftsFromExtraction(
   });
 
   return baseDrafts;
+}
+
+export function buildMappedCustomFieldKeys(mappings: UploadFieldMapping[]) {
+  const keys = new Set<string>();
+
+  mappings.forEach((mapping) => {
+    const fieldKey = MAPPING_FIELD_KEYS[mapping];
+    if (fieldKey) {
+      keys.add(fieldKey);
+    }
+  });
+
+  return keys;
 }
 
 export function buildCustomColumnsFromKeys(keys: Iterable<string>) {
