@@ -7,6 +7,7 @@ import {
   HarmBlockThreshold,
   HarmCategory,
 } from "@google/generative-ai";
+import { UPLOAD_FIELD_MAPPINGS } from "./types";
 import type {
   DetectedColumn,
   GeminiExtractResult,
@@ -16,6 +17,7 @@ import type {
   GeminiPrimaryBlock,
   GeminiRosterMetadata,
   GeminiRosterRow,
+  UploadFieldMapping,
 } from "./types";
 
 export const DEFAULT_GEMINI_MODEL_ID = "gemini-2.5-flash";
@@ -401,17 +403,137 @@ const DERIVED_COLUMN_DEFINITIONS: Array<{
 }> = [
   { key: "child_display_name", header: "Name", suggested_mapping: "Name", confidence: 99 },
   { key: "child_sheet_number", header: "Sheet #", suggested_mapping: "(Ignore)", confidence: 80 },
-  { key: "guardian_full_name", header: "Guardian", suggested_mapping: "(Ignore)", confidence: 78 },
+  { key: "guardian_full_name", header: "Guardian", suggested_mapping: "Guardian Name", confidence: 92 },
   { key: "guardian_phone", header: "Guardian Phone", suggested_mapping: "Guardian Phone", confidence: 92 },
   { key: "guardian_email", header: "Guardian Email", suggested_mapping: "Guardian Email", confidence: 92 },
   { key: "short_code", header: "Short Code", suggested_mapping: "(Ignore)", confidence: 84 },
-  { key: "pickup_drop_location", header: "Pickup/Drop", suggested_mapping: "(Ignore)", confidence: 74 },
+  { key: "pickup_drop_location", header: "Pickup/Drop", suggested_mapping: "Pickup Notes-pre", confidence: 88 },
   { key: "allergies", header: "Allergies", suggested_mapping: "Allergies", confidence: 90 },
   { key: "special_needs", header: "Special Needs", suggested_mapping: "Special Needs", confidence: 88 },
 ];
 
+const UPLOAD_MAPPING_LOOKUP = new Map(
+  UPLOAD_FIELD_MAPPINGS.map((mapping) => [normalizeMappingLabel(mapping), mapping] satisfies [string, UploadFieldMapping])
+);
+
 function normalizeString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeMappingLabel(value: string | null | undefined) {
+  return typeof value === "string"
+    ? value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+    : "";
+}
+
+function inferUploadFieldMapping(header: string, suggestedMapping: string): UploadFieldMapping | "(Ignore)" {
+  const normalizedHeader = normalizeMappingLabel(header);
+  const normalizedSuggestedMapping = normalizeMappingLabel(suggestedMapping);
+  const combinedHint = `${normalizedHeader} ${normalizedSuggestedMapping}`.trim();
+
+  if (!combinedHint) {
+    return "(Ignore)";
+  }
+
+  if (combinedHint === "name" || combinedHint.includes("child name") || combinedHint.includes("student name")) {
+    return "Name";
+  }
+
+  if (combinedHint.includes("guardian phone") || combinedHint.includes("parent phone") || combinedHint.includes("cell") || combinedHint.includes("mobile")) {
+    return "Guardian Phone";
+  }
+
+  if (combinedHint.includes("guardian email") || combinedHint.includes("parent email") || combinedHint.includes("e mail") || combinedHint.includes("email")) {
+    return "Guardian Email";
+  }
+
+  if (
+    (combinedHint.includes("guardian") || combinedHint.includes("parent") || combinedHint.includes("adult contact") || combinedHint.includes("contact name"))
+    && !combinedHint.includes("phone")
+    && !combinedHint.includes("email")
+  ) {
+    return "Guardian Name";
+  }
+
+  if (combinedHint.includes("age") || combinedHint.includes("dob") || combinedHint.includes("birth")) {
+    return "Age (calculate)";
+  }
+
+  if (combinedHint.includes("allerg")) {
+    return "Allergies";
+  }
+
+  if (
+    combinedHint.includes("special need")
+    || combinedHint.includes("accommodation")
+    || combinedHint.includes("support")
+    || combinedHint.includes("medical")
+  ) {
+    return "Special Needs";
+  }
+
+  const mentionsPickupOrDrop = combinedHint.includes("pickup")
+    || combinedHint.includes("drop")
+    || combinedHint.includes("dismiss")
+    || combinedHint.includes("location");
+  if (mentionsPickupOrDrop) {
+    const clearlyPostClass = combinedHint.includes("post")
+      || combinedHint.includes("after")
+      || combinedHint.includes("dismiss")
+      || combinedHint.includes("drop off")
+      || combinedHint.includes("dropoff")
+      || combinedHint.includes("end of class");
+
+    return clearlyPostClass ? "Pickup Notes-post" : "Pickup Notes-pre";
+  }
+
+  if (combinedHint.includes("note") || combinedHint.includes("comment") || combinedHint.includes("remark")) {
+    return "Notes";
+  }
+
+  return "(Ignore)";
+}
+
+function refineDetectedColumnMappings(columns: DetectedColumn[]) {
+  return columns.map((column) => {
+    const exactMatch = UPLOAD_MAPPING_LOOKUP.get(normalizeMappingLabel(column.suggested_mapping));
+    if (exactMatch) {
+      return {
+        ...column,
+        suggested_mapping: exactMatch,
+        confidence: 100,
+      } satisfies DetectedColumn;
+    }
+
+    const headerMatch = UPLOAD_MAPPING_LOOKUP.get(normalizeMappingLabel(column.header));
+    if (headerMatch) {
+      return {
+        ...column,
+        suggested_mapping: headerMatch,
+        confidence: Math.max(column.confidence, 96),
+      } satisfies DetectedColumn;
+    }
+
+    const inferredMapping = inferUploadFieldMapping(column.header, column.suggested_mapping);
+    if (inferredMapping !== "(Ignore)") {
+      const inferredConfidence = inferredMapping === "Guardian Name"
+        ? 94
+        : inferredMapping === "Pickup Notes-pre" || inferredMapping === "Pickup Notes-post"
+          ? 92
+          : 90;
+
+      return {
+        ...column,
+        suggested_mapping: inferredMapping,
+        confidence: Math.max(column.confidence, inferredConfidence),
+      } satisfies DetectedColumn;
+    }
+
+    return {
+      ...column,
+      suggested_mapping: "(Ignore)",
+    } satisfies DetectedColumn;
+  });
 }
 
 function normalizeStringArray(value: unknown) {
@@ -531,8 +653,9 @@ function classifySupportText(value: string) {
 }
 
 function normalizeDetectedColumns(value: unknown, rowCount: number): DetectedColumn[] {
-  return Array.isArray(value)
-    ? value
+  return refineDetectedColumnMappings(
+    Array.isArray(value)
+      ? value
       .filter((column): column is Record<string, unknown> => Boolean(column && typeof column === "object"))
       .map((column) => {
         const normalizedValues = normalizeStringArray(column.values);
@@ -545,7 +668,8 @@ function normalizeDetectedColumns(value: unknown, rowCount: number): DetectedCol
         } satisfies DetectedColumn;
       })
       .filter((column) => column.header)
-    : [];
+      : []
+  );
 }
 
 function normalizeRosterMetadata(value: unknown): GeminiRosterMetadata {
@@ -734,6 +858,11 @@ function hydrateRowsFromLegacy(names: string[], detectedColumns: DetectedColumn[
         return;
       }
 
+      if (column.suggested_mapping === "Guardian Name") {
+        row.guardian_full_name ||= normalizeDisplayName(value);
+        return;
+      }
+
       if (column.suggested_mapping === "Guardian Email") {
         row.guardian_email ||= value;
         return;
@@ -746,6 +875,11 @@ function hydrateRowsFromLegacy(names: string[], detectedColumns: DetectedColumn[
 
       if (column.suggested_mapping === "Special Needs" || column.suggested_mapping === "Notes") {
         mergeNoteIntoRow(row, value);
+        return;
+      }
+
+      if (column.suggested_mapping === "Pickup Notes-pre" || column.suggested_mapping === "Pickup Notes-post") {
+        row.pickup_drop_location ||= value;
         return;
       }
 
@@ -791,7 +925,7 @@ function buildDetectedColumnsFromRows(rows: GeminiRosterRow[], fallbackColumns: 
     });
   });
 
-  return derivedColumns;
+  return refineDetectedColumnMappings(derivedColumns);
 }
 
 function parseGeminiJson(rawText: string): GeminiExtractResult {
@@ -891,7 +1025,7 @@ Return ONLY valid JSON in this exact shape — no markdown fences, no explanatio
     {
       "header": "column header as it appears",
       "sample_values": ["val1", "val2", "val3"],
-      "suggested_mapping": "one of: Name | Guardian Phone | Guardian Email | Age (calculate) | Allergies | Pickup Location | Drop-off Location | Special Needs | Notes | (Ignore)",
+      "suggested_mapping": "one of: Name | Guardian Name | Guardian Phone | Guardian Email | Age (calculate) | Allergies | Pickup Notes-pre | Pickup Notes-post | Special Needs | Notes | (Ignore)",
       "confidence": 0,
       "values": ["row1 value", "row2 value"]
     }
@@ -957,6 +1091,7 @@ Rules:
 - Keep every detected_columns values array aligned only to the selected primary block rows. Never include secondary-block rows there.
 - Use overflow_blocks for secondary roster sections, legends, footer notes, unmatched side notes, or text that cannot be aligned safely to the primary rows.
 - Split allergies from special-needs text only when clearly separable. If mixed text cannot be separated safely, keep it honestly in special_needs and leave allergies blank.
+- Prefer Guardian Name for parent/adult contact-name columns. Prefer Pickup Notes-pre for generic pickup/drop/location columns unless the header clearly indicates after-class or dismissal notes, then use Pickup Notes-post.
 - Preserve ambiguous values honestly. Do not fabricate guardian info, room/time/teacher metadata, pickup/drop semantics, or short-code details.
 - Put only obvious primary-block header metadata into primary_block.metadata. Put ambiguous/manual-apply candidates into metadata_suggestions instead.
 - Always include a Name detected column when a primary block is selected.

@@ -35,6 +35,7 @@ function normalizeAttendanceRows(value: unknown): CheckinSubmitAttendanceRow[] |
 
     const candidate = row as Partial<CheckinSubmitAttendanceRow>;
     const studentId = getOptionalTrimmedString(candidate.student_id);
+    const checkedAt = getOptionalTrimmedString(candidate.checked_at);
 
     if (!studentId || (candidate.status !== "present" && candidate.status !== "absent")) {
       return null;
@@ -51,6 +52,7 @@ function normalizeAttendanceRows(value: unknown): CheckinSubmitAttendanceRow[] |
       checkin_type: candidate.checkin_type === "qr" || candidate.checkin_type === "group"
         ? candidate.checkin_type
         : "manual",
+      checked_at: checkedAt,
     });
   }
 
@@ -164,7 +166,7 @@ export async function POST(req: NextRequest) {
     student_id: a.student_id,
     status: a.status,
     checkin_type: a.checkin_type ?? "manual",
-    checked_at: submittedAt,
+    checked_at: a.checked_at ?? submittedAt,
   }));
 
   const { error: attError } = await supabase

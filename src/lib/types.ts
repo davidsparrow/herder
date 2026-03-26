@@ -2,12 +2,13 @@ import type { PlanTier } from "./plans";
 
 export const UPLOAD_FIELD_MAPPINGS = [
   "Name",
+  "Guardian Name",
   "Guardian Phone",
   "Guardian Email",
   "Age (calculate)",
   "Allergies",
-  "Pickup Location",
-  "Drop-off Location",
+  "Pickup Notes-pre",
+  "Pickup Notes-post",
   "Special Needs",
   "Notes",
   "(Ignore)",
@@ -129,6 +130,7 @@ export interface NotificationLog {
 export interface StudentWithStatus extends Student {
   status: "present" | "absent" | null;
   checkin_type?: "manual" | "qr" | "group";
+  checked_at: string | null;
 }
 
 export type SubmittedAttendanceStatus = Exclude<Attendance["status"], null>;
@@ -137,6 +139,7 @@ export interface CheckinSubmitAttendanceRow {
   student_id: string;
   status: SubmittedAttendanceStatus;
   checkin_type: Attendance["checkin_type"];
+  checked_at: Attendance["checked_at"];
 }
 
 export interface CheckinSubmitRequest {

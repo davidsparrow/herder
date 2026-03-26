@@ -14,6 +14,8 @@ export const STUDENT_CUSTOM_FIELD_DEFINITIONS = {
   guardian_email: { label: "Guardian Email", type: "text" },
   short_code: { label: "Short Code", type: "text" },
   pickup_drop_location: { label: "Pickup / Drop-off", type: "text" },
+  pickup_notes_pre: { label: "Pickup Notes-pre", type: "text" },
+  pickup_notes_post: { label: "Pickup Notes-post", type: "text" },
   pickup_location: { label: "Pickup Location", type: "text" },
   dropoff_location: { label: "Drop-off Location", type: "text" },
   allergies: { label: "Allergies", type: "text" },
@@ -27,12 +29,13 @@ export const STUDENT_CUSTOM_FIELD_LABELS = Object.fromEntries(
 ) as Record<string, string>;
 
 const MAPPING_FIELD_KEYS: Partial<Record<UploadFieldMapping, keyof typeof STUDENT_CUSTOM_FIELD_DEFINITIONS>> = {
+  "Guardian Name": "guardian_name",
   "Guardian Phone": "guardian_phone",
   "Guardian Email": "guardian_email",
   "Age (calculate)": "age",
   Allergies: "allergies",
-  "Pickup Location": "pickup_location",
-  "Drop-off Location": "dropoff_location",
+  "Pickup Notes-pre": "pickup_notes_pre",
+  "Pickup Notes-post": "pickup_notes_post",
   "Special Needs": "special_needs",
   Notes: "notes",
 };
