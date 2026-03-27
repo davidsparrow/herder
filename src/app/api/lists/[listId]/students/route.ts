@@ -79,16 +79,21 @@ function normalizeCustomDataRecord(value: unknown) {
     return {} as Record<string, string | boolean | null>;
   }
 
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).flatMap(([key, entryValue]) => {
-      if (typeof entryValue === "boolean") {
-        return [[key, entryValue] as const];
-      }
+  const normalizedRecord: Record<string, string | boolean | null> = {};
 
-      const normalized = normalizeTrimmedString(entryValue);
-      return normalized ? [[key, normalized] as const] : [];
-    })
-  ) as Record<string, string | boolean | null>;
+  Object.entries(value as Record<string, unknown>).forEach(([key, entryValue]) => {
+    if (typeof entryValue === "boolean") {
+      normalizedRecord[key] = entryValue;
+      return;
+    }
+
+    const normalized = normalizeTrimmedString(entryValue);
+    if (normalized) {
+      normalizedRecord[key] = normalized;
+    }
+  });
+
+  return normalizedRecord;
 }
 
 function buildStudentCustomData(body: AddStudentRequestBody) {
