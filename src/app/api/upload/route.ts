@@ -537,6 +537,67 @@ function extractTextFromPdfContentStream(streamText: string, fontMaps: Map<strin
   return parts.join("");
 }
 
+function collapseCharacterSeparatedPdfText(lines: string[]) {
+  const nonEmptyLines = lines.filter(Boolean);
+  const singleCharacterLineCount = nonEmptyLines.filter((line) => line.length === 1).length;
+
+  if (nonEmptyLines.length < 24 || singleCharacterLineCount / nonEmptyLines.length < 0.6) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  let characterBuffer = "";
+
+  const flushCharacterBuffer = () => {
+    if (!characterBuffer) {
+      return;
+    }
+
+    parts.push(characterBuffer);
+    characterBuffer = "";
+  };
+
+  const pushSpace = () => {
+    flushCharacterBuffer();
+    if (!parts.length) {
+      return;
+    }
+
+    const lastPart = parts[parts.length - 1];
+    if (lastPart !== " " && lastPart !== "\n") {
+      parts.push(" ");
+    }
+  };
+
+  for (const line of lines) {
+    if (!line) {
+      pushSpace();
+      continue;
+    }
+
+    if (line.length === 1) {
+      characterBuffer += line;
+      continue;
+    }
+
+    pushSpace();
+    parts.push(line);
+  }
+
+  flushCharacterBuffer();
+
+  return parts.join("")
+    .replace(/\s+(Total Students Enrolled:)/g, "\n$1")
+    .replace(/\s+(Student)(?=\s+[A-Z])/g, "\n$1")
+    .replace(/\s+(Parent:|Secondary Contact:|Caretaker:|Allergies:|School:|Participation Waiver:|Photo Waiver:)/g, "\n$1")
+    .replace(/(Photo Waiver:\s*(?:I consent|I do not consent))\s+([A-Z][A-Za-z.'’-]+(?:\s+[A-Z][A-Za-z.'’-]+){0,3}\s+\(\d+\s+yrs\))/g, "$1\n$2")
+    .replace(/\s+(NEW TO ACTIVITY|FULL SESSION)\b/g, "\n$1")
+    .replace(/([A-Za-z])\n([a-z])/g, "$1$2")
+    .replace(/ {2,}/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
 function normalizeExtractedPdfText(text: string) {
   const normalizedLines = text
     .replace(/\r/g, "\n")
@@ -544,7 +605,10 @@ function normalizeExtractedPdfText(text: string) {
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter((line, index, lines) => line.length > 0 || (index > 0 && lines[index - 1] !== ""));
 
-  return normalizedLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  const collapsedCharacterText = collapseCharacterSeparatedPdfText(normalizedLines);
+  const normalizedText = collapsedCharacterText ?? normalizedLines.join("\n");
+
+  return normalizedText.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function isUsefulExtractedPdfText(text: string) {
